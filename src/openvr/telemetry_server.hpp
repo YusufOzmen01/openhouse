@@ -60,6 +60,7 @@ class TelemetryServer {
   std::string host_;
   std::thread thread_;
   std::atomic<bool> stop_{false};
+  std::atomic<bool> running_{false};  // Log/PublishState read it from other threads; thread_ they must not
 };
 
 }  // namespace lh::openvr

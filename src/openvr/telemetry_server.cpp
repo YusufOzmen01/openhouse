@@ -66,10 +66,12 @@ bool TelemetryServer::Start(int port, std::string host, std::string* error) {
   host_ = std::move(host);
   stop_ = false;
   thread_ = std::thread([this] { Main(); });
+  running_ = true;
   return true;
 }
 
 void TelemetryServer::Stop() {
+  running_ = false;
   stop_ = true;
   wake_.notify_all();
   if (thread_.joinable()) thread_.join();
@@ -89,7 +91,7 @@ void TelemetryServer::Broadcast(const std::string& line) {
 }
 
 void TelemetryServer::Log(double time, LogLevel level, const std::string& serial, const std::string& text) {
-  if (!thread_.joinable()) return;
+  if (!running_) return;
   const std::string line =
       json{{"type", "log"}, {"t", time}, {"level", LogLevelName(level)}, {"serial", serial}, {"text", text}}.dump(
           -1, ' ', false, json::error_handler_t::replace) + "\n";
@@ -101,7 +103,7 @@ void TelemetryServer::Log(double time, LogLevel level, const std::string& serial
 
 void TelemetryServer::PublishState(double time, const SessionSnapshot& snapshot, const std::vector<DeviceUpdate>& updates,
                                    const std::vector<Session::Receiver>& receivers, const RoomStatus& room) {
-  if (!thread_.joinable()) return;
+  if (!running_) return;
   {
     std::lock_guard lock(mutex_);
     if (clients_.empty()) return;  // nobody watching: skip the work

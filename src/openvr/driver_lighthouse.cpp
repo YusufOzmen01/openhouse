@@ -753,6 +753,11 @@ class Provider : public IServerTrackedDeviceProvider {
   EVRInitError Init(IVRDriverContext* context) override {
     VR_INIT_SERVER_DRIVER_CONTEXT(context);
     context_ = context;
+    if (const int port = lh::telemetry::PortFromEnvironment(); port > 0) {
+      std::string telemetryError;
+      if (g_telemetry.Start(port, HostName(), &telemetryError)) Log(lh::LogLevel::Debug, "viewer telemetry on 127.0.0.1:" + std::to_string(port));
+      else Log(lh::LogLevel::Warn, "viewer telemetry unavailable: " + telemetryError);
+    }
     lh::SessionOptions options;
     if (const char* replay = std::getenv("LH_REPLAY")) options.replayPath = replay;
     if (const char* room = std::getenv("LH_ROOM_MAP")) options.roomMapPath = room;
@@ -813,6 +818,7 @@ class Provider : public IServerTrackedDeviceProvider {
     if (!session_->Start(&error)) {
       Log("could not start: " + error);
       session_.reset();
+      g_telemetry.Stop();  // the host skips Cleanup after a failed Init
       return VRInitError_Init_HmdNotFound;
     }
     ApplyTuning(true);
@@ -869,11 +875,6 @@ class Provider : public IServerTrackedDeviceProvider {
         Log("headset " + which + " on USB: loading the stock driver for its display");
         stock_.Load(path, context_, [](const std::string& text) { Log(text); });
       }
-    }
-    if (const int port = lh::telemetry::PortFromEnvironment(); port > 0) {
-      std::string telemetryError;
-      if (g_telemetry.Start(port, HostName(), &telemetryError)) Log(lh::LogLevel::Debug, "viewer telemetry on 127.0.0.1:" + std::to_string(port));
-      else Log(lh::LogLevel::Warn, "viewer telemetry unavailable: " + telemetryError);
     }
     stop_ = false;
     thread_ = std::thread([this] { Main(); });
