@@ -948,6 +948,7 @@ class Provider : public IServerTrackedDeviceProvider {
 
   // The headset's expected controllers (Prop_ExpectedControllerType_String), "" if none.
   std::string ExpectedControllerType() const {
+    std::lock_guard lock(devicesMutex_);
     for (const auto& [serial, device] : devices_)
       if (device && device->IsHmd() && device->Active()) return device->StringProperty(Prop_ExpectedControllerType_String);
     return {};
@@ -1036,7 +1037,7 @@ class Provider : public IServerTrackedDeviceProvider {
           DeviceStatic info{hmd->serial, {}, {}, {}, {}, lh::DeviceRole::Hmd, {}};
           auto device = std::make_unique<Device>(info);
           device->AttachExternal(hmd->objectId, hmd->alive);
-          devices_[hmd->serial] = std::move(device);
+          { std::lock_guard lock(devicesMutex_); devices_[hmd->serial] = std::move(device); }
           stock_.OwnPose(hmd->objectId);
           Log("head-mounted display " + hmd->serial + ": pose from our tracking");
         }
@@ -1132,7 +1133,7 @@ class Provider : public IServerTrackedDeviceProvider {
   void Add(const DeviceStatic& info, ETrackedDeviceClass cls) {
     auto device = std::make_unique<Device>(info);
     Device* raw = device.get();
-    devices_[info.serial] = std::move(device);
+    { std::lock_guard lock(devicesMutex_); devices_[info.serial] = std::move(device); }
     // The host may call Activate() from inside this call (Monado does).
     if (!VRServerDriverHost()->TrackedDeviceAdded(info.serial.c_str(), cls, raw))
       Log("host declined " + info.serial + (cls == TrackedDeviceClass_TrackingReference ? " (base station)" : ""));
@@ -1176,6 +1177,7 @@ class Provider : public IServerTrackedDeviceProvider {
   std::thread thread_;
   std::atomic<bool> stop_{false};
   std::map<std::string, std::unique_ptr<Device>> devices_;
+  mutable std::mutex devicesMutex_;  // Main's writes vs RunFrame's walk; Main's own reads need none
   lh::SessionSnapshot snapshot_;
   lh::openvr::RawAlignment alignment_;
   bool steamFrame_ = false;
