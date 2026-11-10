@@ -8,6 +8,11 @@
 #include "openvr/host_frame.hpp"
 #include "openvr/haptic_routing.hpp"
 #include "openvr/telemetry_server.hpp"
+#include "openvr/pairing_mailbox.hpp"
+#include "lh/session.hpp"
+#include <algorithm>
+#include <cstring>
+#include <deque>
 #include "common/net.hpp"
 #include "lh/log_level.hpp"
 #include <chrono>
@@ -493,4 +498,63 @@ TEST(LogLevels, ClassifiesAndParses) {
   EXPECT_EQ(l, lh::LogLevel::Warn);
   EXPECT_FALSE(lh::ParseLogLevel("loud", &l));
   EXPECT_STREQ(lh::LogLevelName(lh::LogLevel::Error), "ERR");
+}
+
+namespace {
+struct FakeMailbox : lh::openvr::IVRMailbox, vr::IVRDriverContext {
+  std::deque<std::string> in;
+  std::vector<std::string> sent;
+  void* GetGenericInterface(const char*, vr::EVRInitError*) override { return static_cast<lh::openvr::IVRMailbox*>(this); }
+  vr::DriverHandle_t GetDriverHandle() override { return 0; }
+  int RegisterMailbox(const char*, uint64_t* h, char*, uint32_t) override { *h = 1; return 0; }
+  int UndoRegisterMailbox(uint64_t) override { return 0; }
+  int SendMessage(uint64_t, const char*, const char* m) override { sent.push_back(m); return 0; }
+  int ReadMessage(uint64_t, char* b, uint32_t size, uint32_t* needed) override {
+    if (in.empty()) { *needed = 0; return 1; }
+    *needed = uint32_t(in.front().size() + 1);
+    if (*needed <= size) { std::memcpy(b, in.front().c_str(), *needed); in.pop_front(); }
+    return 0;
+  }
+};
+struct StubSession : lh::Session {
+  bool Start(std::string*) override { return false; }
+  void Stop() override {}
+  bool Running() const override { return false; }
+  bool Finished() const override { return false; }
+  lh::SessionSnapshot Snapshot() const override { return {}; }
+  std::vector<lh::DeviceUpdate> Updates() const override { return {}; }
+  double HostNow() const override { return 0; }
+  std::vector<lh::SessionEvent> PollEvents() override { return {}; }
+  void SetDeviceEnabled(const std::string&, bool) override {}
+  void SetOutputTuning(double, double, bool) override {}
+  std::vector<Receiver> Receivers() const override { return {{"\xE9", ""}}; }  // not UTF-8
+  bool SetPairing(const std::string&, double) override { return false; }
+  bool HasBluetoothRadio() const override { return false; }
+  bool SetBluetoothRadio(bool) override { return false; }
+  std::optional<bool> BluetoothRadioOn() override { return std::nullopt; }
+  bool SetCapture(const std::string&) override { return false; }
+  bool Haptic(const std::string&, double, double, double) override { return false; }
+  bool PowerOff(const std::string&) override { return false; }
+  void ResetRoom() override {}
+  uint64_t RoomResets() const override { return 0; }
+  bool SaveRoom(std::string*) override { return false; }
+};
+std::vector<std::string> pairingLog;
+}  // namespace
+
+TEST(Pairing, IgnoresBadlyTypedMessagesAndRepliesWithValidJson) {
+  FakeMailbox host;
+  StubSession session;
+  lh::openvr::PairingMailbox mailbox;
+  ASSERT_TRUE(mailbox.Open(&host, [](const std::string& line) { pairingLog.push_back(line); }));
+  host.in = {R"({"type":1})", R"({"type":"start_pairing","serial":5})",
+             R"({"type":"discover_dongles","returnAddress":"a"})"};
+  EXPECT_NO_THROW(mailbox.Poll(session, ""));
+  EXPECT_EQ(std::count_if(pairingLog.begin(), pairingLog.end(),
+                          [](const std::string& l) { return l.rfind("pairing: bad message ignored", 0) == 0; }), 2);
+  ASSERT_EQ(host.sent.size(), 1u);
+  const auto reply = nlohmann::json::parse(host.sent[0], nullptr, false);
+  ASSERT_FALSE(reply.is_discarded()) << host.sent[0];
+  EXPECT_EQ(reply.value("type", ""), "discover_dongles_response");
+  EXPECT_EQ(reply["dongles"].size(), 1u);
 }

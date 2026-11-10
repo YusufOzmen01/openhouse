@@ -1,5 +1,6 @@
 #include "pairing_mailbox.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 
@@ -54,7 +55,7 @@ std::string PairingMailbox::Discover(Session& session, const std::string& expect
   for (const auto& r : session.Receivers())
     j["dongles"].push_back({{"serial", r.serial}, {"firmwareVersion", ""}, {"connectedSerial", r.connected}});
   if (messageId) j["message_id"] = json::parse(*messageId);
-  return j.dump();
+  return j.dump(-1, ' ', false, json::error_handler_t::replace);  // receiver serials may not be UTF-8
 }
 
 void PairingMailbox::Finish(Session& session, const std::string& result, const std::string& connected,
@@ -65,7 +66,7 @@ void PairingMailbox::Finish(Session& session, const std::string& result, const s
   if (pairing_->haveMessageId) j["message_id"] = pairing_->messageId;
   const Pairing done = *pairing_;
   pairing_.reset();
-  Reply(done.returnAddress, j.dump());
+  Reply(done.returnAddress, j.dump(-1, ' ', false, json::error_handler_t::replace));
   if (done.sendStatus) Reply(done.returnAddress, Discover(session, expected, nullptr));
   if (log_) log_("pairing: receiver " + done.receiver + ": " + result + (connected.empty() ? "" : " (" + connected + ")"));
 }
@@ -82,47 +83,51 @@ void PairingMailbox::Poll(Session& session, const std::string& expected) {
     if (r != 0 || needed == 0) break;
     const json message = json::parse(std::string(buffer_.data(), strnlen(buffer_.data(), buffer_.size())), nullptr, false);
     if (!message.is_object()) continue;
-    const std::string type = message.value("type", "");
-    const std::string address = message.value("returnAddress", "");
-    const std::string id = message.contains("message_id") ? message.at("message_id").dump() : "";
-    const std::string* idp = id.empty() ? nullptr : &id;
-    if (log_) log_("pairing: " + (type.empty() ? std::string("message without a type") : type) + " from " +
-                   (address.empty() ? std::string("(no return address)") : address));
-    if (type == "discover_dongles") {
-      const std::string reply = Discover(session, expected, idp);
-      if (log_) log_("pairing: dongles " + reply);
-      Reply(address, reply);
-    } else if (type == "start_pairing") {
-      const std::string serial = message.value("serial", "");
-      const double timeout = message.contains("timeoutSeconds") && message.at("timeoutSeconds").is_number()
-                                 ? message.at("timeoutSeconds").get<double>()
-                                 : 10.0;
-      if (pairing_) Finish(session, "canceled", "", expected);
-      std::string before;
-      for (const auto& rcv : session.Receivers())
-        if (rcv.serial == serial) before = rcv.connected;
-      Pairing p;
-      p.receiver = serial;
-      p.returnAddress = address;
-      p.before = before;
-      p.sawEmpty = before.empty();
-      p.haveMessageId = message.contains("message_id") && message.at("message_id").is_number();
-      if (p.haveMessageId) p.messageId = message.at("message_id").get<double>();
-      p.sendStatus = message.value("sendStatusUpdates", false);
-      p.deadline = Now() + timeout;
-      pairing_ = p;
-      if (!session.SetPairing(serial, timeout)) {
-        Finish(session, "failed_to_start", "", expected);
-        continue;
+    try {
+      const std::string type = message.value("type", "");
+      const std::string address = message.value("returnAddress", "");
+      const std::string id = message.contains("message_id") ? message.at("message_id").dump() : "";
+      const std::string* idp = id.empty() ? nullptr : &id;
+      if (log_) log_("pairing: " + (type.empty() ? std::string("message without a type") : type) + " from " +
+                     (address.empty() ? std::string("(no return address)") : address));
+      if (type == "discover_dongles") {
+        const std::string reply = Discover(session, expected, idp);
+        if (log_) log_("pairing: dongles " + reply);
+        Reply(address, reply);
+      } else if (type == "start_pairing") {
+        const std::string serial = message.value("serial", "");
+        const double timeout = message.contains("timeoutSeconds") && message.at("timeoutSeconds").is_number()
+                                   ? std::clamp(message.at("timeoutSeconds").get<double>(), 0.0, 600.0)
+                                   : 10.0;
+        if (pairing_) Finish(session, "canceled", "", expected);
+        std::string before;
+        for (const auto& rcv : session.Receivers())
+          if (rcv.serial == serial) before = rcv.connected;
+        Pairing p;
+        p.receiver = serial;
+        p.returnAddress = address;
+        p.before = before;
+        p.sawEmpty = before.empty();
+        p.haveMessageId = message.contains("message_id") && message.at("message_id").is_number();
+        if (p.haveMessageId) p.messageId = message.at("message_id").get<double>();
+        p.sendStatus = message.value("sendStatusUpdates", false);
+        p.deadline = Now() + timeout;
+        pairing_ = p;
+        if (!session.SetPairing(serial, timeout)) {
+          Finish(session, "failed_to_start", "", expected);
+          continue;
+        }
+        if (log_) log_("pairing: receiver " + serial + " in pairing mode for " + std::to_string(int(timeout)) + " s");
+        if (p.sendStatus) Reply(address, Discover(session, expected, nullptr));
+      } else if (type == "stop_pairing") {
+        if (pairing_ && message.value("serial", "") == pairing_->receiver) {
+          session.SetPairing(pairing_->receiver, 0);
+          if (!address.empty()) pairing_->returnAddress = address;
+          Finish(session, "canceled", "", expected);
+        }
       }
-      if (log_) log_("pairing: receiver " + serial + " in pairing mode for " + std::to_string(int(timeout)) + " s");
-      if (p.sendStatus) Reply(address, Discover(session, expected, nullptr));
-    } else if (type == "stop_pairing") {
-      if (pairing_ && message.value("serial", "") == pairing_->receiver) {
-        session.SetPairing(pairing_->receiver, 0);
-        if (!address.empty()) pairing_->returnAddress = address;
-        Finish(session, "canceled", "", expected);
-      }
+    } catch (const std::exception& e) {  // a wrongly typed field must not escape RunFrame
+      if (log_) log_(std::string("pairing: bad message ignored (") + e.what() + ")");
     }
   }
   if (!pairing_) return;
