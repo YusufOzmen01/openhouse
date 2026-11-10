@@ -194,6 +194,7 @@ bool Wv2Decoder::Decode(uint8_t msb, const uint8_t* p, int n, WirelessPacket* ou
     out->hasImu = true;
   }
   int len = (f & 0xf) + 1;
+  if (sections == 2 && len > n - int(q - p)) return false;
   bool doInput = input;
   if (meta) {
     if (sections != 2) {
@@ -304,7 +305,7 @@ bool Wv2Decoder::Decode(uint8_t msb, const uint8_t* p, int n, WirelessPacket* ou
   if (opticalSub == 0xff) return false;
   if (opticalSub == 0) {
     const int ll = n - int(q - p);
-    if (ll >= 0x1c) return false;
+    if (ll < 0 || ll >= 0x1c) return false;
     uint8_t buf[0x20];
     buf[0] = lsb;
     std::memcpy(buf + 1, q, size_t(ll));

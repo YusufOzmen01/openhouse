@@ -119,4 +119,24 @@ TEST(WirelessReconnect, ResetsProtocolClockAndImuEpoch) {
   EXPECT_EQ(decoder.Wireless(1)->ProtocolVersion(), 2);
 }
 
+// #41: a first section longer than the packet drove the light memcpy negative.
+TEST(Wv2Decoder, RejectsSectionLongerThanPacket) {
+  auto decode = [](uint8_t f, int n, int opticalSub, int controllerSub, uint8_t fill) {
+    std::vector<uint8_t> slot(27, fill);  // exactly one radio slot, so ASan sees any read past it
+    slot[1] = f;
+    lh::usb::Wv2Decoder d;
+    d.opticalSub = opticalSub;
+    d.controllerSub = controllerSub;
+    lh::usb::WirelessPacket out;
+    return d.Decode(0, slot.data(), n, &out);
+  };
+  EXPECT_FALSE(decode(0x5f, 3, 0, 0, 0));  // meta + light
+  EXPECT_FALSE(decode(0x3f, 3, 0, 1, 0));  // input + light
+  for (int opticalSub : {0, 1})
+    for (int controllerSub : {0, 1, 2})
+      for (int fill : {0x00, 0xff})
+        for (int f = 0; f < 256; ++f)
+          for (int n = 1; n <= 27; ++n) decode(uint8_t(f), n, opticalSub, controllerSub, uint8_t(fill));
+}
+
 }  // namespace
