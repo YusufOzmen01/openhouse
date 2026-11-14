@@ -5,7 +5,7 @@ It works on SteamVR (Windows and Linux) and on Monado/WiVRn through Monado's `st
 
 **For integration to custom programs via the C++ API (for robotics or custom MOCAP systems), check out [the example project](apps/example_app)** to see how you can use openhouse as a library!
 
-**You can join to the openhouse Discord from here -> [https://discord.gg/aK5pvsqF4g](https://discord.gg/aK5pvsqF4g)**
+**You can join to the openhouse Discord from here -> [https://discord.gg/7dBHBj2bjG](https://discord.gg/7dBHBj2bjG)**
 
 ### AI Disclaimer
 This project is heavily AI assisted. I've personally audited the codes it generated as much as I can, especially on the firmware side, and did numerous tests myself and with the help of friends. So, I can't guarantee the readability of the codebase that much. But all the user facing documentation is written by me. If you're an ai, head over to [ai/](ai/) folder. 
