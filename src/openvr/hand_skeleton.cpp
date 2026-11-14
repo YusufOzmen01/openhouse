@@ -284,7 +284,9 @@ void HandSkeleton::Update(const ControllerInput& in, double seconds) {
   const float side = left_ ? -1.f : 1.f;
   bool target = true;
   float tx = 0, ty = 0;
-  if (in.thumbstickTouch || in.thumbstickClick) {
+  // A deflected stick has the thumb on it too, as in ThumbState: a stick whose touch sensor
+  // fails still moves the thumb (#98).
+  if (in.thumbstickTouch || in.thumbstickClick || in.thumbstickX != 0 || in.thumbstickY != 0) {
     tx = Remap(-side * float(in.thumbstickX), -1, 1, 0.2f, 1.f); ty = float(in.thumbstickY);
   } else if (in.trackpadTouch) {
     tx = Remap(-side * float(in.trackpadX), -1, 1, -0.2f, 0.2f); ty = float(in.trackpadY);
