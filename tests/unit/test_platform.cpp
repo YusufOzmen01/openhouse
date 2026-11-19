@@ -55,4 +55,54 @@ TEST(Platform, ReplacesExistingFileWithoutDeletingItOnFailure) {
   EXPECT_EQ(text(), "new");
   fs::remove_all(dir);
 }
+
+TEST(Platform, ReadsValuesOfAKeyFromSteamKeyValuesText) {
+  // A comment holding "path", a label whose value is the word "path", an empty block, an escaped
+  // backslash and quote, and a block key without a value.
+  const std::string text =
+      "\"libraryfolders\"\n{\n"
+      "  // a comment with \"path\" \"/not/this\"\n"
+      "  \"0\" { \"label\" \"path\"  \"path\" \"/lib/zero\"  \"apps\" { } }\n"
+      "  \"1\" { \"path\" \"D:\\\\Games\\\\Steam \\\"x\\\"\"  \"apps\" { \"250820\" \"1\" } }\n"
+      "}\n";
+  const auto paths = lh::platform::VdfValuesOfKey(text, "path");
+  ASSERT_EQ(paths.size(), 2u);
+  EXPECT_EQ(paths[0], "/lib/zero");
+  EXPECT_EQ(paths[1], "D:\\Games\\Steam \"x\"");
+  EXPECT_TRUE(lh::platform::VdfValuesOfKey("", "path").empty());
+  EXPECT_TRUE(lh::platform::VdfValuesOfKey("\"unterminated { \"path", "path").empty());
+}
+
+TEST(Platform, FindsSteamVRInTheLibraryThatHasIt) {
+  namespace fs = std::filesystem;
+  const auto dir = fs::temp_directory_path() / ("lh-libs-" + std::to_string(lh::platform::ProcessId()));
+  fs::remove_all(dir);
+  fs::create_directories(dir / "first");  // a library without SteamVR
+  fs::create_directories(dir / "second/steamapps/common/SteamVR/drivers/lighthouse");
+  const std::string vdf = "\"libraryfolders\" { \"0\" { \"path\" \"" + (dir / "first").string() +
+                          "\" } \"1\" { \"path\" \"" + (dir / "second").string() + "\" } }";
+  EXPECT_EQ(lh::platform::SteamVRFromLibraryFoldersText(vdf),
+            (dir / "second/steamapps/common/SteamVR").string());
+  EXPECT_EQ(lh::platform::SteamVRFromLibraryFoldersText(""), "");
+  fs::remove_all(dir);
+}
+
+#ifndef _WIN32
+TEST(Platform, StockDriverIsSteamVRsOwnAndNeverOurs) {
+  namespace fs = std::filesystem;
+  const auto steamvr = fs::temp_directory_path() / ("lh-stock-" + std::to_string(lh::platform::ProcessId()));
+  const auto bin = steamvr / "drivers/lighthouse/bin/linux64";
+  fs::remove_all(steamvr);
+  fs::create_directories(bin);
+  auto write = [&](const char* name, const char* content) { std::ofstream(bin / name, std::ios::binary) << content; };
+  EXPECT_EQ(lh::platform::FindStockDriver(steamvr), "");  // no driver at all
+  write("driver_lighthouse.so", "openhouse 1.0: liblh session started (live USB)");
+  EXPECT_EQ(lh::platform::FindStockDriver(steamvr), "");  // ours installed without a backup: never load it
+  write("driver_lighthouse.so", "Valve's own driver");
+  EXPECT_EQ(lh::platform::FindStockDriver(steamvr), (bin / "driver_lighthouse.so").string());
+  write("driver_lighthouse.so.stock", "Valve's backup");
+  EXPECT_EQ(lh::platform::FindStockDriver(steamvr), (bin / "driver_lighthouse.so.stock").string());  // the installer's copy wins
+  fs::remove_all(steamvr);
+}
+#endif
 }

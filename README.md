@@ -55,13 +55,7 @@ Extract the zip somewhere and double click `openhouse-installer.exe`, then pick 
 If your SteamVR is in another Steam library, run it from a command prompt like `openhouse-installer.exe --install --steamvr "D:\SteamLibrary\steamapps\common\SteamVR"`.
 
 ### Linux
-```sh
-tar xf openhouse-driver-linux.tar.gz
-cd openhouse-driver
-./install.sh
-./uninstall.sh # to restore the stock driver
-```
-If SteamVR is somewhere unusual, set `STEAMVR_DIR` before running it. The tracking visualizer needs `glfw` installed.
+Register the openhouse driver to replace the lighthouse driver with `packaging/steamvr-external-driver.sh register`, this will disable lighthouse and set openhouse as a loaded external_driver. Unregister and reenable lighthouse with `packaging/steamvr-external-driver.sh unregister`. Depends on `jq` package being installed on system to parse the steam configs.
 
 ### 1.0 basestation firmware (lhbs)
 #### **THIS IS ONLY NEEDED IF YOU OWN 1.0 BASESTATIONS AND WANT TO USE MORE THAN TWO OF THEM AT THE SAME TIME. DO NOT FLASH THIS ON 2.0 BASESTATIONS!!!!!!!** 

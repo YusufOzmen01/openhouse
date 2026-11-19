@@ -2,6 +2,7 @@
 
 #include "device_abi.hpp"
 #include "pairing_mailbox.hpp"
+#include "platform/platform.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -716,11 +717,15 @@ std::string StockHmd::DefaultPath() {
   const auto u8 = path.u8string();
   return std::string(u8.begin(), u8.end());
 #else
+  // The installer's copy beside us first (openhouse installed into SteamVR); else SteamVR's own
+  // driver where it lives (openhouse installed elsewhere, e.g. /usr/share/openhouse).
   Dl_info info{};
-  if (!dladdr(reinterpret_cast<void*>(&StockHmd::DefaultPath), &info) || !info.dli_fname) return {};
-  const auto path = std::filesystem::path(info.dli_fname).parent_path() / "driver_lighthouse.so.stock";
-  std::error_code ec;
-  return std::filesystem::exists(path, ec) ? path.string() : std::string();
+  if (dladdr(reinterpret_cast<void*>(&StockHmd::DefaultPath), &info) && info.dli_fname) {
+    const auto path = std::filesystem::path(info.dli_fname).parent_path() / "driver_lighthouse.so.stock";
+    std::error_code ec;
+    if (std::filesystem::exists(path, ec)) return path.string();
+  }
+  return lh::platform::FindStockDriver(lh::platform::SteamVRDirectory());
 #endif
 }
 

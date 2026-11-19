@@ -9,9 +9,6 @@ out="$repo/dist/openhouse-driver"
 rm -rf "$out"
 mkdir -p "$out/tools"
 python3 "$repo/scripts/package-driver.py" "$build/openvr/lighthouse/bin/linux64/driver_lighthouse.so" "$out" | tail -n1
-cp "$repo/packaging/install-linux.sh" "$out/install.sh"
-cp "$repo/packaging/uninstall-linux.sh" "$out/uninstall.sh"
-cp "$repo/packaging/steamvr-dir.sh" "$out/.steamvr-dir.sh"
 # Notices: openhouse's own, the vcpkg libraries built in, and what the tools link or embed.
 cp "$repo/LICENSE" "$out/LICENSE.txt"
 prefix=$(sed -n 's/^VCPKG_INSTALLED_DIR:[A-Z]*=//p' "$build/CMakeCache.txt")/$(sed -n 's/^VCPKG_TARGET_TRIPLET:[A-Z]*=//p' "$build/CMakeCache.txt")

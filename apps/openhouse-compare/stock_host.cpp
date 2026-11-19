@@ -296,24 +296,8 @@ StockHost::~StockHost() { Stop(); }
 
 std::string StockHost::FindDriver() {
   if (const char* p = std::getenv("LH_STOCK_DRIVER"); p && *p) return p;
-#ifdef _WIN32
-  const auto dir = std::filesystem::path(lh::platform::SteamVRDirectory()) / "drivers/lighthouse/bin/win64";
-  const char *stock = "driver_lighthouse.dll.stock", *original = "driver_lighthouse.dll";
-#else
-  const auto dir = std::filesystem::path(lh::platform::SteamVRDirectory()) / "drivers/lighthouse/bin/linux64";
-  const char *stock = "driver_lighthouse.so.stock", *original = "driver_lighthouse.so";
-#endif
-  std::error_code ec;
-  if (std::filesystem::exists(dir / stock, ec)) return (dir / stock).string();
-  // No installer copy: the installed one is stock unless it's ours, which carries the line it
-  // logs on start (the installers and openhouse-check test the same; lh-dependencies.json,
-  // tested before, is never in SteamVR's folder).
-  if (!std::filesystem::exists(dir / original, ec)) return "";
-  std::ifstream in(dir / original, std::ios::binary);
-  if (!in) return "";
-  const std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-  if (bytes.find("liblh session started") != std::string::npos) return "";
-  return (dir / original).string();
+  // The installer's copy, else the installed driver unless it's ours (shared with the driver).
+  return lh::platform::FindStockDriver(lh::platform::SteamVRDirectory());
 }
 
 bool StockHost::Start(const std::string& path, std::string* error) {

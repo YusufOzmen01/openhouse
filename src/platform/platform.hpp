@@ -147,6 +147,55 @@ inline std::string SteamVRFromOpenVRPaths() {
     if (std::filesystem::exists(std::filesystem::path(dir) / "drivers/lighthouse", ec)) return dir;
   return {};
 }
+// The values of every "key" "value" pair named `key` in Valve's KeyValues text (Steam's
+// libraryfolders.vdf): quoted strings, "key" { ... } blocks, // comments, \\ and \" escapes.
+// Not a general parser; malformed text just yields what came before it.
+inline std::vector<std::string> VdfValuesOfKey(const std::string& text, const std::string& key) {
+  std::vector<std::string> out;
+  std::string lastKey;
+  bool wantValue = false;  // the last string was a key: the next one is its value
+  for (size_t i = 0; i < text.size(); ++i) {
+    const char c = text[i];
+    if (c == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+      while (i < text.size() && text[i] != '\n') ++i;
+    } else if (c == '{' || c == '}') {
+      wantValue = false;  // that key opened a block: it has no value
+    } else if (c == '"') {
+      std::string s;
+      for (++i; i < text.size() && text[i] != '"'; ++i) {
+        if (text[i] == '\\' && i + 1 < text.size()) {
+          ++i;
+          s += text[i] == 'n' ? '\n' : text[i] == 't' ? '\t' : text[i];
+        } else {
+          s += text[i];
+        }
+      }
+      if (wantValue) {
+        if (lastKey == key) out.push_back(s);
+        wantValue = false;
+      } else {
+        lastKey = std::move(s);
+        wantValue = true;
+      }
+    }
+  }
+  return out;
+}
+// SteamVR in any Steam library of a libraryfolders.vdf: each library's "path" is asked directly
+// whether it holds SteamVR, rather than trusting the file's "apps" list (stale after moves).
+inline std::string SteamVRFromLibraryFoldersText(const std::string& text) {
+  std::error_code ec;
+  for (const auto& library : VdfValuesOfKey(text, "path")) {
+    const auto dir = std::filesystem::path(library) / "steamapps/common/SteamVR";
+    if (std::filesystem::exists(dir / "drivers/lighthouse", ec)) return dir.string();
+  }
+  return {};
+}
+inline std::string SteamVRFromLibraryFolders() {
+  std::ifstream in(SteamRoot() + "/steamapps/libraryfolders.vdf", std::ios::binary);
+  const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  return SteamVRFromLibraryFoldersText(text);
+}
 inline std::string SteamVRDirectory() {
   if (auto dir = Env("STEAMVR_PATH"); !dir.empty()) return dir;
   if (auto dir = SteamVRFromOpenVRPaths(); !dir.empty()) return dir;
@@ -164,7 +213,31 @@ inline std::string SteamVRDirectory() {
     }
   }
 #endif
-  return SteamRoot() + "/steamapps/common/SteamVR";
+  if (auto dir = SteamVRFromLibraryFolders(); !dir.empty()) return dir;
+  return SteamRoot() + "/steamapps/common/SteamVR";  // last-resort guess: the default library
+}
+// Whether a file is openhouse's own driver: it carries the line it logs on start (the installers
+// and openhouse-check test the same string).
+inline bool IsOpenhouseDriver(const std::filesystem::path& file) {
+  std::ifstream in(file, std::ios::binary);
+  const std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  return bytes.find("liblh session started") != std::string::npos;
+}
+// SteamVR's own lighthouse driver, for the headset's display, when it isn't beside openhouse:
+// the installer's ".stock" copy if there is one, else the installed driver unless it is ours
+// (an openhouse installed into SteamVR without a backup must not load itself). Empty if none.
+inline std::string FindStockDriver(const std::filesystem::path& steamvr) {
+#ifdef _WIN32
+  const auto dir = steamvr / "drivers/lighthouse/bin/win64";
+  const char *stock = "driver_lighthouse.dll.stock", *original = "driver_lighthouse.dll";
+#else
+  const auto dir = steamvr / "drivers/lighthouse/bin/linux64";
+  const char *stock = "driver_lighthouse.so.stock", *original = "driver_lighthouse.so";
+#endif
+  std::error_code ec;
+  if (std::filesystem::exists(dir / stock, ec)) return (dir / stock).string();
+  if (!std::filesystem::exists(dir / original, ec) || IsOpenhouseDriver(dir / original)) return {};
+  return (dir / original).string();
 }
 // std::filesystem::rename doesn't replace an existing destination on Windows.
 // Never delete the old valid file before installing the new one.
