@@ -34,6 +34,54 @@ extern uint32_t __isr_vector[];
 #endif
 #endif
 
+/* LEDs on PWM0 at 1 kHz, so they can pulse. A first-edge-rising PWM is low for COMP of TOP counts: an active-low
+   LED is lit for COMP, an active-high one for TOP - COMP. A board with an RGB LED (the PCA10059 and the Holyiot
+   21017, a copy of it) shows everything on it; other boards on their one LED. */
+#define HAVE_RGB BOARD_HAS_RGB
+#if BOARD_HAS_RGB
+static const uint8_t led_pins[3] = { BOARD_RGB_R_PIN, BOARD_RGB_G_PIN, BOARD_RGB_B_PIN };
+#define LED_N 3
+#elif BOARD_HAS_LED
+static const uint8_t led_pins[1] = { BOARD_LED_PORT * 32 + BOARD_LED_PIN };
+#define LED_N 1
+#endif
+#define LED_ACTIVE_LOW BOARD_LED_ACTIVE_LOW
+#if BOARD_HAS_LED
+#define RGB_TOP 1000u
+static uint16_t led_seq[4];
+static uint8_t led_pwm_on;
+static void led_pwm_init(void)
+{
+  for (int i = 0; i < LED_N; i++) NRF_PWM0->PSEL.OUT[i] = led_pins[i];
+  for (int i = LED_N; i < 4; i++) NRF_PWM0->PSEL.OUT[i] = 0xFFFFFFFFu;
+  NRF_PWM0->MODE = 0; NRF_PWM0->PRESCALER = 4;              /* 1 MHz */
+  NRF_PWM0->COUNTERTOP = RGB_TOP;
+  NRF_PWM0->DECODER = 2;                                    /* individual: one value per channel */
+  NRF_PWM0->LOOP = 0;
+  NRF_PWM0->SEQ[0].PTR = (uint32_t)led_seq; NRF_PWM0->SEQ[0].CNT = 4;
+  NRF_PWM0->SEQ[0].REFRESH = 0; NRF_PWM0->SEQ[0].ENDDELAY = 0;
+  NRF_PWM0->ENABLE = 1;
+  led_pwm_on = 1;
+}
+/* Brightness 0-255 per LED (r, g, b; a one-LED board takes r). Restarts the sequence so the values apply; after
+   it the PWM keeps the last ones. */
+static void led_set(uint8_t r, uint8_t g, uint8_t b)
+{
+  static uint8_t last[3] = { 1, 1, 1 };
+  if (!led_pwm_on) led_pwm_init();
+  const uint8_t v[3] = { r, g, b };
+  if (!memcmp(v, last, LED_N)) return;
+  memcpy(last, v, 3);
+  for (int i = 0; i < LED_N; i++) {
+    const uint16_t c = (uint16_t)(v[i] * RGB_TOP / 255u);
+    led_seq[i] = LED_ACTIVE_LOW ? c : (uint16_t)(RGB_TOP - c);
+  }
+  NRF_PWM0->TASKS_SEQSTART[0] = 1;
+}
+#endif
+/* A triangle 0-255-0 over period ms: the slow pulse. */
+static uint8_t pulse(uint32_t now, uint32_t period) { const uint32_t t = now % period, h = period / 2; return (uint8_t)((t < h ? t : period - t) * 255u / h); }
+
 /* ---------- crash record (survives soft resets; outside the linker's RAM region) ---------- */
 typedef struct {
     uint32_t magic, type, pc, lr, psr, cfsr, hfsr, bfar, count, sum;
@@ -358,11 +406,29 @@ int main(void) {
         if (pending_scan) { pending_scan = 0; link_rssi_scan(scan_first, reply + 3, 60); reply[2] = ST_OK; pending_reply = 1; }
         usb_service();
         if (pending_action && !pending_reply) { uint8_t a = pending_action; pending_action = 0; do_action(a, reply[3]); }
-        /* repeater: on, off 0.1 s each second = following the main; 4 Hz blink = searching */
+        /* Repeater: relaying = solid (green); attached, nothing to relay = slow pulse (orange), or 1 s on and
+           1 s off on a plain LED; weak signal to its main = fast flash (orange); looking for a main = a short
+           blink twice a second (blue). A main keeps its blink, once a second. */
         const int sat = link_led();
         uint32_t period = 1000, on = 900;
-        if (sat == 0) { period = 250; on = 125; }
-        else if (sat < 0) { period = tud_mounted() ? 1000 : 200; on = period / 10; }
-        if (ms_ticks % period < on) LED_ON(); else LED_OFF();
+        if (sat == 0) { period = 500; on = 100; }
+        else if (sat == 1) { period = 2000; on = 1000; }
+        else if (sat == 2) { period = 1000; on = 1000; }
+        else if (sat == 3) { period = 150; on = 75; }
+        else { period = tud_mounted() ? 1000 : 200; on = period / 10; }
+        const int lit = ms_ticks % period < on; (void)lit;   /* (no LED on some boards) */
+#if BOARD_HAS_LED
+        const uint8_t pl = pulse(ms_ticks, 2000);
+#if HAVE_RGB
+        LED_OFF();                                              /* (its plain green LED: the RGB one shows it all) */
+        if (sat == 2) led_set(0, 255, 0);
+        else if (sat == 1) led_set(pl, (uint8_t)(pl * 2 / 5), 0);
+        else if (sat == 3) led_set(lit ? 255 : 0, lit ? 100 : 0, 0);
+        else if (sat == 0) led_set(0, 0, lit ? 255 : 0);
+        else led_set(0, lit ? 255 : 0, 0);                      /* a main: green, its blink */
+#else
+        led_set(sat == 1 ? pl : lit ? 255 : 0, 0, 0);
+#endif
+#endif
     }
 }
