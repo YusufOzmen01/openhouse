@@ -15,8 +15,10 @@
 #endif
 #include <windows.h>
 #include <cfgmgr32.h>
-#include <hidsdi.h>
 #include <setupapi.h>
+extern "C" {
+#include <hidsdi.h>
+}
 #endif
 
 namespace lh::usb {
