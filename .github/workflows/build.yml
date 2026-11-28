@@ -33,8 +33,6 @@ jobs:
   linux:
     needs: firmware
     runs-on: ubuntu-24.04
-    env:
-      OPENHOUSE_FIRMWARES: ${{ runner.temp }}/firmwares
     steps:
       - uses: actions/checkout@v4
       # The firmware job's images: every package carries the same build (scripts/stage-firmwares.py).
@@ -42,6 +40,7 @@ jobs:
         with:
           name: firmwares
           path: ${{ runner.temp }}/firmwares
+      - run: echo "OPENHOUSE_FIRMWARES=$RUNNER_TEMP/firmwares" >> "$GITHUB_ENV"
       - name: Install build tools
         run: |
           sudo apt-get update
@@ -104,8 +103,6 @@ jobs:
   windows:
     needs: firmware
     runs-on: ubuntu-24.04
-    env:
-      OPENHOUSE_FIRMWARES: ${{ runner.temp }}/firmwares
     outputs:
       unsigned-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
     steps:
@@ -115,6 +112,7 @@ jobs:
         with:
           name: firmwares
           path: ${{ runner.temp }}/firmwares
+      - run: echo "OPENHOUSE_FIRMWARES=$RUNNER_TEMP/firmwares" >> "$GITHUB_ENV"
       - name: Install build tools
         run: |
           sudo apt-get update
