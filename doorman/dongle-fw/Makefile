@@ -19,9 +19,10 @@ LDFLAGS = -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16 -flto -Wl,-
 #   build/doorman_dongle_<v>_a.bin / _b.bin   firmware for bank A / B: self-updates over USB (cmd 0x40-0x42)
 #   build/doorman_dongle_<v>.hex (.uf2)       boot stub + bank A's image: what a bootloader installs
 #                                             (first install or rescue)
-# The boards: one file each in ../boards/*.json (ai/doorman/boards.md). ../tools/boards.py makes the board
+# The boards: one file each in ../boards/*.json (../boards/ADDING_DEVICES.md). ../tools/boards.py makes the board
 # list (build/boards.mk: VARIANTS, the shipped dongles; CHECKS, built but never shipped) and each board's
 # header (build/board_<name>.h, passed with -include): its SoC, flash layout, bootloader and hardware.
+.DEFAULT_GOAL := all   # boards.mk below is the first rule: without this a clean tree builds only it
 BOARD_FILES = $(wildcard ../boards/*.json)
 build/boards.mk: $(BOARD_FILES) ../tools/boards.py
 	@mkdir -p build
