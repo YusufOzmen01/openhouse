@@ -95,7 +95,8 @@ ceiling ≈ 8 devices per dongle (needs `DML_SLOTS` and the USB split changed); 
 * Flash: a boot stub at the app start (0x1000; 0x26000 for the Pro Micro "sd" build), with bank A's image
   as payload; then bank A and bank B, each a 4 KB header page + image (`src/banks.h`):
   "std" A 0x10000 / B 0x70000 (0x60000 each), "sd" A 0x30000 / B 0x8E000 (0x5E000 each, to the pairing
-  page). Header: magic "OHBK", sequence, size, CRC32, origin (CRC of the stub payload the chain started from).
+  page). nRF52833: "833_uf2" A 0x10000 / B 0x30000 (0x20000 each), "833_sd" (S140 7.3.0, the stub
+  at 0x27000) A 0x32000 / B 0x48000 (0x16000 each, to 0x5E000, below the pairing page 0x5F000). Header: magic "OHBK", sequence, size, CRC32, origin (CRC of the stub payload the chain started from).
 * The stub boots the valid bank with the highest sequence. With no valid bank, or when the newest bank's
   origin isn't its payload (a bootloader just installed a new one), it installs its payload into bank A
   first (sequence + 1). So a bootloader flash always takes effect (rescue, downgrade).

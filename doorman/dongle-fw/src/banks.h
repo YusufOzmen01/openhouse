@@ -11,11 +11,13 @@
 
    Layouts: "std" (MBR only: Nordic DFU boards and the Pro Micro "nosd" build): stub at 0x1000, banks at
    0x10000 / 0x70000. "sd" (Pro Micro with the SoftDevice area kept): stub at 0x26000, banks at 0x30000 /
-   0x8E000, ending at the pairing page (0xEC000). */
+   0x8E000, ending at the pairing page (0xEC000). "833_uf2" (nRF52833, MBR only): stub at 0x1000, banks at
+   0x10000 / 0x30000. "833_sd" (nRF52833 with S140 7.3.0, up to 0x27000): stub at 0x27000, banks at
+   0x32000 / 0x48000, ending below the pairing page (0x5F000). */
 #include <stdint.h>
 #include "dongle.h"
 
-#if defined(NRF52833_XXAA) != BANK_LAYOUT_833_UF2
+#if defined(NRF52833_XXAA) != (BANK_LAYOUT_833_UF2 || BANK_LAYOUT_833_SD)
 #error "Select a supported flash layout for the target SoC"
 #endif
 
@@ -29,6 +31,10 @@
 #define BANK_A          0x00010000u
 #define BANK_B          0x00030000u
 #define BANK_SIZE       0x00020000u
+#elif BANK_LAYOUT_833_SD
+#define BANK_A          0x00032000u
+#define BANK_B          0x00048000u
+#define BANK_SIZE       0x00016000u
 #elif BANK_LAYOUT_SD
 #define BANK_A          0x00030000u
 #define BANK_B          0x0008E000u

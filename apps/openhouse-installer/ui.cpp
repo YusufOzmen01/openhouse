@@ -1776,7 +1776,7 @@ void Ui::DonglePage() {
       std::vector<Row> rows;
       for (const auto& b : lh::doorman_boards::kBoards) {
         if (!lh::doorman_boards::Other(b)) continue;
-        const char* layout = std::strcmp(b.soc, "nrf52833") == 0 ? "833_uf2" : b.softdevice ? "sd" : "std";
+        const char* layout = b.softdevice ? "sd" : "std";   // (the chip has its own column)
         auto it = std::find_if(rows.begin(), rows.end(), [&](const Row& r) {
           return std::strcmp(r.b->display, b.display) == 0 && std::strcmp(r.b->bootloader, b.bootloader) == 0;
         });

@@ -32,6 +32,7 @@ inline constexpr Board kBoards[] = {
   {"generic840", 5, false, "Generic nRF52840", "Adafruit bootloader", "nrf52840", "uf2", false, false},
   {"generic840_sd", 5, true, "Generic nRF52840", "Adafruit bootloader", "nrf52840", "uf2", false, false},
   {"generic833", 6, false, "Generic nRF52833", "Adafruit bootloader", "nrf52833", "uf2", false, false},
+  {"generic833_sd", 6, true, "Generic nRF52833", "Adafruit bootloader", "nrf52833", "uf2", false, false},
   {"generic840_dfu", 7, false, "Generic nRF52840", "Nordic bootloader", "nrf52840", "nordic_dfu", false, false},
   {"generic833_dfu", 8, false, "Generic nRF52833", "Nordic bootloader", "nrf52833", "nordic_dfu", false, false},
 };

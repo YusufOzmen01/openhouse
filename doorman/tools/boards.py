@@ -16,9 +16,9 @@ build/doorman_dongle_<name>*, its zip <name>.zip):
               Ids 0-4 are openhouse's own dongles (the installer's tiles); the rest are listed under
               Other Dongles, by id.
   soc         nrf52840 | nrf52833
-  softdevice  its bootloader keeps a SoftDevice (the app starts at 0x26000). The flash layout built
-              (banks.h, ld/) follows from it, the SoC and the kind: sd with one, std without, the nRF52833's
-              own addresses (833_uf2), the Index radio's single image (idx).
+  softdevice  its bootloader keeps a SoftDevice (the app starts at 0x26000, 0x27000 on an nRF52833). The flash
+              layout built (banks.h, ld/) follows from it, the SoC and the kind: sd with one, std without, the
+              nRF52833's own addresses (833_sd, 833_uf2), the Index radio's single image (idx).
   bootloader  uf2 (Adafruit) | nordic_dfu (Nordic's open USB DFU) | valve_serial (Valve's radio DFU)
   led         {"pin": "P0.06", "active_low": true}, or left out: a board whose LED isn't known drives no pin
   fem         {"ctx": "P0.24", "crx": "P0.22", "txpower": "Neg4dBm"}: a SKY66112-style front-end amplifier
@@ -52,11 +52,11 @@ def load():
         if 'layout' in b:
             sys.exit(f'boards: {p.name}: no "layout": it follows from "softdevice"')
         b.setdefault('softdevice', False)
-        if b['soc'] == 'nrf52833' and b['softdevice']:
-            sys.exit(f'boards: {p.name}: no flash layout for an nRF52833 with a SoftDevice yet')
         # the flash layout built (banks.h, ld/): the Index radio's single image, the nRF52833's own, sd or std
-        b['flash'] = ('idx' if b['kind'] == 'index_radio' else '833_uf2' if b['soc'] == 'nrf52833'
-                      else 'sd' if b['softdevice'] else 'std')
+        if b['kind'] == 'index_radio': b['flash'] = 'idx'
+        elif b['soc'] == 'nrf52833': b['flash'] = '833_sd' if b['softdevice'] else '833_uf2'
+        else: b['flash'] = 'sd' if b['softdevice'] else 'std'
+
         boards.append(b)
     ids = {}
     for b in boards:
@@ -97,6 +97,7 @@ def header(b):
         f'#define VARIANT_SD {int(b["softdevice"])}',
         f'#define BANK_LAYOUT_SD {int(b["flash"] == "sd")}',
         f'#define BANK_LAYOUT_833_UF2 {int(b["flash"] == "833_uf2")}',
+        f'#define BANK_LAYOUT_833_SD {int(b["flash"] == "833_sd")}',
         f'#define BOARD_IDX {int(b["kind"] == "index_radio")}',
         f'#define BOARD_NORDIC_DFU {int(b["bootloader"] != "uf2")}',
         f'#define BOARD_PAIR_PAGE {b["pair_page"]}u',
