@@ -17,10 +17,13 @@ emu: $(B)/radio_batch.bin $(B)/gen_emu.bin $(B)/gen_ref
 check: $(B)/hop_test
 	$(B)/hop_test
 
-# link.c itself, against a stand-in for the nRF registers (stub/nrf.h)
-$(B)/hop_test: hop_test.c stub/nrf.h ../dongle-fw/src/link.c ../dongle-fw/src/dongle.h ../dongle-fw/src/banks.h $(HDRS)
+# link.c itself, against a stand-in for the nRF registers (stub/nrf.h), built as the Pro Micro board
+$(B)/board_nosd.h: ../boards/nosd.json ../tools/boards.py
 	@mkdir -p $(B)
-	$(CC) $(HOSTFLAGS) -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast -Istub $< -o $@
+	python3 ../tools/boards.py header nosd $@
+$(B)/hop_test: hop_test.c stub/nrf.h ../dongle-fw/src/link.c ../dongle-fw/src/dongle.h ../dongle-fw/src/banks.h $(HDRS) $(B)/board_nosd.h
+	@mkdir -p $(B)
+	$(CC) $(HOSTFLAGS) -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast -Istub -include $(B)/board_nosd.h $< -o $@
 
 $(B)/%: %.c $(HDRS)
 	@mkdir -p $(B)
