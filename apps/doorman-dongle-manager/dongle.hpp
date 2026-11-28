@@ -7,6 +7,8 @@
 // reports on interface 0 (even slots) and 1 (odd slots). The driver may have the dongle open
 // at the same time: HID input reports reach every open handle, and replies are matched by seq.
 #pragma once
+#include <cstring>
+#include "common/doorman_boards.hpp"
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -61,9 +63,15 @@ struct DongleState {
   int board = 0;  // 0 UF2 (Pro Micro), 1 Holyiot 21017, 2 PCA10059, 3 Kuroshin (Nordic DFU), 4 Valve Index HMD radio
   int bank = 0;   // 1 A, 2 B: the bank running (0: older firmware, updates through its bootloader)
   int slotCount = 8;  // slots it has (it says so from firmware 0x002A; older ones have 8)
-  bool NordicDfu() const { return board == 1 || board == 2; }
+  bool NordicDfu() const {   // updates through Nordic's open DFU bootloader (doorman/boards)
+    const auto* b = lh::doorman_boards::Find(board, softdeviceVariant);
+    return b && std::strcmp(b->bootloader, "nordic_dfu") == 0;
+  }
   bool Banked() const { return bank != 0; }   // runs the two-bank layout: updates itself
-  bool IndexRadio() const { return board == 4; }   // updates through Valve's bootloader, from the installer
+  bool IndexRadio() const {
+    const auto* b = lh::doorman_boards::Find(board, softdeviceVariant);
+    return b && b->indexRadio;
+  }   // updates through Valve's bootloader, from the installer
   uint32_t uptimeMs = 0, resetReason = 0;
   uint32_t crashCount = 0, crashType = 0, crashPc = 0;
   bool linkOn = true;

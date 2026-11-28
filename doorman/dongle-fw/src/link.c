@@ -297,12 +297,12 @@ static int decode_some(void)
   return 0;
 }
 
-/* ---------------- front-end amplifier (Holyiot 21017: SKY66112, CTX P0.24 / CRX P0.22) ----------------
+/* ---------------- front-end amplifier (the board's "fem": SKY66112 on the Holyiot 21017, CTX P0.24 / CRX P0.22) ----
    Both pins are GPIOTE task outputs. Software raises CTX before TXEN and CRX before RXEN; the TX->RX
    turnaround (DISABLED_RXEN shortcut) is too fast for the CPU, so PPI swaps CTX->CRX on that DISABLED. */
-#if BOARD_HOLYIOT
-#define FEM_CTX_PIN 24
-#define FEM_CRX_PIN 22
+#if BOARD_HAS_FEM
+#define FEM_CTX_PIN BOARD_FEM_CTX_PIN
+#define FEM_CRX_PIN BOARD_FEM_CRX_PIN
 #define FEM_GT_CTX 6
 #define FEM_GT_CRX 7
 #define FEM_PPI 0
@@ -321,8 +321,8 @@ static void fem_off(void) { NRF_PPI->CHENCLR = 1u << FEM_PPI;
                             NRF_GPIOTE->TASKS_CLR[FEM_GT_CTX] = 1; NRF_GPIOTE->TASKS_CLR[FEM_GT_CRX] = 1; }
 static void fem_turnaround_arm(void)    { NRF_PPI->CHENSET = 1u << FEM_PPI; }
 static void fem_turnaround_disarm(void) { NRF_PPI->CHENCLR = 1u << FEM_PPI; }
-/* SKY66112 adds ~22 dB: -4 dBm at the chip is ~+18 dBm out, under the 20 dBm EIRP limit */
-#define RADIO_TXPOWER RADIO_TXPOWER_TXPOWER_Neg4dBm
+/* the board's "txpower": SKY66112 adds ~22 dB, so -4 dBm at the chip is ~+18 dBm out, under the 20 dBm EIRP limit */
+#define RADIO_TXPOWER BOARD_RADIO_TXPOWER
 #else
 static void fem_init(void) {}
 static void fem_tx(void) {}
@@ -330,7 +330,7 @@ static void fem_rx(void) {}
 static void fem_off(void) {}
 static void fem_turnaround_arm(void) {}
 static void fem_turnaround_disarm(void) {}
-#define RADIO_TXPOWER RADIO_TXPOWER_TXPOWER_Pos8dBm
+#define RADIO_TXPOWER BOARD_RADIO_TXPOWER
 #endif
 
 /* ---------------- radio primitives ---------------- */

@@ -1,0 +1,9 @@
+{
+  "id": 7,
+  "display": "Generic nRF52840",
+  "product": "Dongle nRF52840",
+  "note": "Nordic bootloader",
+  "soc": "nrf52840",
+  "bootloader": "nordic_dfu",
+  "pair_page": "0xDA000"
+}

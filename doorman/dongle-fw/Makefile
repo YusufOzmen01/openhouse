@@ -1,7 +1,7 @@
 # Doorman dongle firmware (ai/doorman/dongle-fw.md)
 # make            -> every board's install image and bank images (below)
 # make idx       -> the Valve Index HMD radio image (ai/doorman/index-radio.md)
-# make check-nrf52833 -> compile/link and convert the board-independent build check
+# make check-nrf52833 -> the nRF52833 boards only
 CC = arm-none-eabi-gcc
 OBJCOPY = arm-none-eabi-objcopy
 TUSB = ../third_party/tinyusb
@@ -19,51 +19,62 @@ LDFLAGS = -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16 -flto -Wl,-
 #   build/doorman_dongle_<v>_a.bin / _b.bin   firmware for bank A / B: self-updates over USB (cmd 0x40-0x42)
 #   build/doorman_dongle_<v>.hex (.uf2)       boot stub + bank A's image: what a bootloader installs
 #                                             (first install or rescue)
-VARIANTS = sd nosd holyiot pca10059 kuroshin
-# A board selects its SoC and flash layout independently. Existing boards default to nrf52840/std.
-layout_sd = sd
-soc_check_52833 = nrf52833
-layout_check_52833 = 833_uf2
-soc = $(or $(soc_$(1)),nrf52840)
+# The boards: one file each in ../boards/*.json (ai/doorman/boards.md). ../tools/boards.py makes the board
+# list (build/boards.mk: VARIANTS, the shipped dongles; CHECKS, built but never shipped) and each board's
+# header (build/board_<name>.h, passed with -include): its SoC, flash layout, bootloader and hardware.
+BOARD_FILES = $(wildcard ../boards/*.json)
+build/boards.mk: $(BOARD_FILES) ../tools/boards.py
+	@mkdir -p build
+	python3 ../tools/boards.py mk $@
+-include build/boards.mk
+build/board_%.h: ../boards/%.json ../tools/boards.py
+	@mkdir -p build
+	python3 ../tools/boards.py header $* $@
+soc = $(soc_$(1))
 device_nrf52840 = NRF52840_XXAA
 device_nrf52833 = NRF52833_XXAA
-family_nrf52840 = 0xADA52840
-family_nrf52833 = 0x621E937A
-layout = $(or $(layout_$(1)),std)
+layout = $(layout_$(1))
 startup = $(NRFX)/mdk/gcc_startup_$(call soc,$(1)).S
-chip_flags = -D$(device_$(call soc,$(1))) -DBANK_LAYOUT_833_UF2=$(if $(filter 833_uf2,$(call layout,$(1))),1,0)
-uses_sd = $(if $(filter sd,$(call layout,$(1))),1,0)
-board_flags = -DVARIANT_SD=$(call uses_sd,$(1)) -DBANK_LAYOUT_SD=$(call uses_sd,$(1)) \
-  -DBOARD_HOLYIOT=$(if $(filter holyiot,$(1)),1,0) -DBOARD_PCA10059=$(if $(filter pca10059,$(1)),1,0) \
-  -DBOARD_KUROSHIN=$(if $(filter kuroshin,$(1)),1,0)
+chip_flags = -D$(device_$(call soc,$(1)))
+board_flags = -include build/board_$(1).h
 
 all: $(foreach v,$(VARIANTS),build/doorman_dongle_$(v).hex build/doorman_dongle_$(v)_a.bin build/doorman_dongle_$(v)_b.bin) \
-  build/doorman_dongle_sd.uf2 build/doorman_dongle_nosd.uf2 build/doorman_dongle_idx.bin
+  $(foreach v,$(VARIANTS),$(if $(filter uf2,$(bootloader_$(v))),build/doorman_dongle_$(v).uf2)) build/doorman_dongle_idx.bin \
+  zips
 
 define variant
-build/doorman_dongle_$(1).uf2: UF2_FAMILY = $(family_$(call soc,$(1)))
-build/doorman_dongle_$(1)_%.elf: Makefile $(call sources,$(call soc,$(1))) $(call startup,$(1)) src/*.h ../common/*.h $(NRFX)/mdk/nrf_common.ld ld/bank_$(call layout,$(1))_%.ld
+build/doorman_dongle_$(1).uf2: UF2_FAMILY = $(family_$(1))
+build/doorman_dongle_$(1)_%.elf: Makefile build/board_$(1).h $(call sources,$(call soc,$(1))) $(call startup,$(1)) src/*.h ../common/*.h $(NRFX)/mdk/nrf_common.ld ld/bank_$(call layout,$(1))_%.ld
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(call chip_flags,$(1)) $(call board_flags,$(1)) $(call sources,$(call soc,$(1))) $(call startup,$(1)) \
 	  $(LDFLAGS) -Tld/bank_$(call layout,$(1))_$$*.ld -Wl,-Map=build/doorman_dongle_$(1)_$$*.map -o $$@
 	arm-none-eabi-size $$@
 
 # the boot stub, with bank A's image packed as payload (src/lz_unpack.h)
-build/doorman_dongle_$(1).elf: Makefile src/stub.c src/banks.h src/dongle.h src/lz_unpack.h ld/stub_$(call layout,$(1)).ld build/doorman_dongle_$(1)_a.lz
+build/doorman_dongle_$(1).elf: Makefile build/board_$(1).h src/stub.c src/banks.h src/dongle.h src/lz_unpack.h ld/stub_$(call layout,$(1)).ld build/doorman_dongle_$(1)_a.lz
 	$(CC) $(CFLAGS) $(call chip_flags,$(1)) $(call board_flags,$(1)) -DPAYLOAD_BIN='"build/doorman_dongle_$(1)_a.lz"' src/stub.c -nostartfiles -nostdlib \
 	  $(LDFLAGS) -Tld/stub_$(call layout,$(1)).ld -Wl,-Map=build/doorman_dongle_$(1).map -o $$@
 	arm-none-eabi-size $$@
 endef
-$(foreach v,$(VARIANTS) check_52833,$(eval $(call variant,$(v))))
+$(foreach v,$(BANKED),$(eval $(call variant,$(v))))
 
-# Exercises both banks and the install-image pipeline. These files have no board-specific pin map.
-check-nrf52833: build/doorman_dongle_check_52833.uf2 build/doorman_dongle_check_52833_b.bin
+# One zip per shipped board (and the Index radio): build/zips/<name>.zip, what the packages carry in
+# firmwares/dongle/ (../tools/boards.py zip: board.json, the install image, the two bank images).
+build/zips/%.zip: ../boards/%.json ../tools/boards.py ../common/doorman_versions.h
+	@mkdir -p build/zips
+	python3 ../tools/boards.py zip $* build $@
+$(foreach v,$(VARIANTS),$(eval build/zips/$(v).zip: build/doorman_dongle_$(v).hex build/doorman_dongle_$(v)_a.bin build/doorman_dongle_$(v)_b.bin $(if $(filter uf2,$(bootloader_$(v))),build/doorman_dongle_$(v).uf2)))
+build/zips/idx.zip: build/doorman_dongle_idx.bin
+zips: $(foreach v,$(VARIANTS),build/zips/$(v).zip) build/zips/idx.zip
+
+# The nRF52833 builds (the generic boards): both banks and the install image.
+check-nrf52833: build/zips/generic833.zip build/zips/generic833_dfu.zip
 
 # Valve Index HMD radio ("gravidongle", ai/doorman/index-radio.md): nRF52840 + S140 6.1.1, one image at 0x26000
 # updated through Valve's serial-DFU bootloader; no banks, no stub.
-build/doorman_dongle_idx.elf: Makefile $(call sources,nrf52840) $(call startup,idx) src/*.h ../common/*.h $(NRFX)/mdk/nrf_common.ld ld/app_idx.ld
+build/doorman_dongle_idx.elf: Makefile build/board_idx.h $(call sources,nrf52840) $(call startup,idx) src/*.h ../common/*.h $(NRFX)/mdk/nrf_common.ld ld/app_idx.ld
 	@mkdir -p build
-	$(CC) $(CFLAGS) $(call chip_flags,idx) -DVARIANT_SD=1 -DBANK_LAYOUT_SD=0 -DBOARD_IDX=1 $(call sources,nrf52840) $(call startup,idx) \
+	$(CC) $(CFLAGS) $(call chip_flags,idx) $(call board_flags,idx) $(call sources,nrf52840) $(call startup,idx) \
 	  $(LDFLAGS) -Tld/app_idx.ld -Wl,-Map=build/doorman_dongle_idx.map -o $@
 	arm-none-eabi-size $@
 build/doorman_dongle_idx.bin: build/doorman_dongle_idx.elf
@@ -88,11 +99,11 @@ build/%_a.lz: build/%_a.bin tools/lzpack.py build/lzcheck
 	build/lzcheck $@ $<
 build/%.hex: build/%.elf
 	$(OBJCOPY) -O ihex $< $@
-UF2_FAMILY ?= $(family_nrf52840)
+UF2_FAMILY ?= 0xADA52840
 build/%.uf2: build/%.hex
 	python3 tools/uf2conv.py -f $(UF2_FAMILY) -c -o $@ $< >/dev/null
 
 clean:
 	rm -rf build
 .SECONDARY:
-.PHONY: all clean check-nrf52833 idx
+.PHONY: all clean check-nrf52833 idx zips

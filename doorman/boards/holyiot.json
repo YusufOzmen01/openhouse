@@ -1,0 +1,18 @@
+{
+  "id": 1,
+  "display": "Holyiot 21017",
+  "product": "Dongle Holyiot",
+  "note": "Nordic bootloader",
+  "soc": "nrf52840",
+  "bootloader": "nordic_dfu",
+  "led": {
+    "pin": "P0.06",
+    "active_low": true
+  },
+  "fem": {
+    "ctx": "P0.24",
+    "crx": "P0.22",
+    "txpower": "Neg4dBm"
+  },
+  "pair_page": "0xDA000"
+}

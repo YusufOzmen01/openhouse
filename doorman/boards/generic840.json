@@ -1,0 +1,9 @@
+{
+  "id": 5,
+  "display": "Generic nRF52840",
+  "product": "Dongle nRF52840",
+  "note": "Adafruit bootloader",
+  "soc": "nrf52840",
+  "bootloader": "uf2",
+  "pair_page": "0xEC000"
+}

@@ -20,12 +20,5 @@ inline uint32_t Crc32(const std::vector<uint8_t>& data) {
   return ~c;
 }
 
-// The packaged image to send (firmwares/dongle/bank/<board>-<a|b>.bin): the one for the bank that
-// isn't running. board: cmd 0x01 byte 57 (0 Pro Micro, 1 Holyiot, 2 PCA10059, 3 Kuroshin); sd: the
-// Pro Micro build that keeps the SoftDevice area (byte 6); bank: the running one (byte 59: 1 A, 2 B).
-inline std::string ImageName(int board, bool sd, int runningBank) {
-  const char* name = board == 1 ? "holyiot" : board == 2 ? "pca10059" : board == 3 ? "kuroshin" : sd ? "sd" : "nosd";
-  return std::string(name) + (runningBank == 1 ? "-b.bin" : "-a.bin");
-}
 
 }  // namespace lh::dongle_bank

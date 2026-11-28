@@ -31,13 +31,21 @@ env:
 
 jobs:
   linux:
+    needs: firmware
     runs-on: ubuntu-24.04
+    env:
+      OPENHOUSE_FIRMWARES: ${{ runner.temp }}/firmwares
     steps:
       - uses: actions/checkout@v4
+      # The firmware job's images: every package carries the same build (scripts/stage-firmwares.py).
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmwares
+          path: ${{ runner.temp }}/firmwares
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build pkg-config libudev-dev libglfw3-dev libgl-dev libfreetype-dev patchelf libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols gcc-arm-none-eabi libnewlib-arm-none-eabi
+          sudo apt-get install -y ninja-build pkg-config libudev-dev libglfw3-dev libgl-dev libfreetype-dev patchelf libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
       - name: OpenVR headers
         run: |
           git clone --depth 1 --branch "$OPENVR_TAG" https://github.com/ValveSoftware/openvr.git "$RUNNER_TEMP/openvr"
@@ -94,15 +102,23 @@ jobs:
           if-no-files-found: error
 
   windows:
+    needs: firmware
     runs-on: ubuntu-24.04
+    env:
+      OPENHOUSE_FIRMWARES: ${{ runner.temp }}/firmwares
     outputs:
       unsigned-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@v4
+      # The firmware job's images: every package carries the same build (scripts/stage-firmwares.py).
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmwares
+          path: ${{ runner.temp }}/firmwares
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build pkg-config mingw-w64 gcc-arm-none-eabi libnewlib-arm-none-eabi
+          sudo apt-get install -y ninja-build pkg-config mingw-w64
           # std::thread needs MinGW's posix thread model (Ubuntu defaults to win32).
           sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
           sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
@@ -220,25 +236,21 @@ jobs:
       # The packages carry the images (scripts/stage-firmwares.py); this checks lhbs on the host.
       - name: Build and host test
         run: scripts/build-firmware.sh
-      - name: Check nRF52833 dongle build
-        run: make -C doorman/dongle-fw check-nrf52833
-      # The images users flash. Nothing above links them: check-nrf52833 builds one board's banks and the host test
-      # builds link.c alone, so an install stub that outgrows its region (ld/stub_sd.ld: 40 KB) failed only where
-      # someone built it, never on the push that broke it.
-      - name: Build Doorman dongle images
-        run: make -C doorman/dongle-fw
-      - name: Build Doorman radio images
-        run: |
-          make -C doorman/radio-fw
-          make -C doorman/radio-fw TARGET=idx
+      # The apps' board table has to match doorman/boards.
+      - name: Board table
+        run: python3 doorman/tools/boards.py check-cpp src/common/doorman_boards.hpp
+      # Every image the packages carry: one zip per dongle board, the radios, lhbs.
+      - name: Build the firmwares
+        run: python3 scripts/stage-firmwares.py "$RUNNER_TEMP/stage"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmwares
+          path: ${{ runner.temp }}/stage/firmwares
+          if-no-files-found: error
       # How much room the install stubs have left; the link itself fails on the push that overflows.
       - name: Doorman install image headroom
         run: |
-          arm-none-eabi-size doorman/dongle-fw/build/doorman_dongle_sd.elf \
-            doorman/dongle-fw/build/doorman_dongle_nosd.elf \
-            doorman/dongle-fw/build/doorman_dongle_holyiot.elf \
-            doorman/dongle-fw/build/doorman_dongle_pca10059.elf \
-            doorman/dongle-fw/build/doorman_dongle_kuroshin.elf
+          arm-none-eabi-size $(ls doorman/dongle-fw/build/doorman_dongle_*.elf | grep -v '_[ab]\.elf$')
       # The dongle's link.c built on the host: adaptive hopping on all 16 against master's rule, and homes (cmd 0x36).
       - name: Doorman hopping host test
         run: make -C doorman/test check

@@ -8,6 +8,8 @@
 // with -rnt, the Vive wand (nRF51 too) with -rn from its bootloader. Anything else (headsets,
 // base stations) is never flashed here.
 #pragma once
+#include <cstring>
+#include "common/doorman_boards.hpp"
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -101,9 +103,10 @@ struct DoormanDongleInfo {
   int bank = 0;                  // the bank it runs from (1 A, 2 B); 0: older firmware without banks
   int slots = 8;                 // the slots it has (it says so from firmware 0x002A; older ones have 8)
   int oldRadios = -1;            // its connected devices whose radio has an update (-1: not asked)
-  bool NordicDfu() const { return board >= 1 && board <= 3; }
+  const lh::doorman_boards::Board* Board() const { return lh::doorman_boards::Find(board, softDeviceBuild); }
+  bool NordicDfu() const { const auto* b = Board(); return b && std::strcmp(b->bootloader, "nordic_dfu") == 0; }
   bool Banked() const { return bank != 0; }   // updates itself over USB, no bootloader
-  bool IndexRadio() const { return board == 4; }
+  bool IndexRadio() const { const auto* b = Board(); return b && b->indexRadio; }
 };
 std::vector<DoormanDongleInfo> FindDoormanDongles();
 bool RebootToBootloader(const DoormanDongleInfo& d);  // its UF2 drive appears (Nordic DFU boards: its serial port)

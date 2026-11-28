@@ -16,21 +16,22 @@
 #endif
 
 extern uint32_t __isr_vector[];
-#if BOARD_IDX
-/* The Index radio module's LED pin (if any) is not known: never drive a pin we don't own. */
+#if !BOARD_HAS_LED
+/* A board whose LED (if any) isn't known (the Index radio, generic boards): never drive a pin we don't own. */
 #define LED_INIT() do {} while (0)
 #define LED_ON()   do {} while (0)
 #define LED_OFF()  do {} while (0)
-#elif BOARD_NORDIC_DFU
-#define LED_PIN 6    /* P0.06: green LED, active low (Holyiot 21017 and PCA10059 alike) */
-#define LED_INIT() (NRF_P0->PIN_CNF[LED_PIN] = 1)
-#define LED_ON()  (NRF_P0->OUTCLR = 1u << LED_PIN)
-#define LED_OFF() (NRF_P0->OUTSET = 1u << LED_PIN)
 #else
-#define LED_PIN 15   /* P0.15: Pro Micro / nice!nano LED, active high */
-#define LED_INIT() (NRF_P0->PIN_CNF[LED_PIN] = 1)
-#define LED_ON()  (NRF_P0->OUTSET = 1u << LED_PIN)
-#define LED_OFF() (NRF_P0->OUTCLR = 1u << LED_PIN)
+#define LED_PIN BOARD_LED_PIN
+#define LED_GPIO (BOARD_LED_PORT ? NRF_P1 : NRF_P0)
+#define LED_INIT() (LED_GPIO->PIN_CNF[LED_PIN] = 1)
+#if BOARD_LED_ACTIVE_LOW
+#define LED_ON()  (LED_GPIO->OUTCLR = 1u << LED_PIN)
+#define LED_OFF() (LED_GPIO->OUTSET = 1u << LED_PIN)
+#else
+#define LED_ON()  (LED_GPIO->OUTSET = 1u << LED_PIN)
+#define LED_OFF() (LED_GPIO->OUTCLR = 1u << LED_PIN)
+#endif
 #endif
 
 /* ---------- crash record (survives soft resets; outside the linker's RAM region) ---------- */
@@ -298,7 +299,7 @@ int main(void) {
     SCB->VTOR = (uint32_t)__isr_vector;     /* our own table, whatever the bootloader/MBR set */
     NRF_NVMC->ICACHECNF = NVMC_ICACHECNF_CACHEEN_Msk;   /* off after reset: every fetch waited on flash (decoding ~3x slower) */
     __DSB(); __ISB();
-#if BOARD_PCA10059
+#if BOARD_REGOUT0_3V0
     /* The PCA10059 runs straight off USB (VDDH), and a blank chip sets its GPIO supply (REGOUT0) to
        1.8 V: too low to light the LEDs well. Like Nordic's board code: once, 3.0 V. Only clears bits
        of a UICR word still at its erased value, so no erase, and only when nothing set it yet. */

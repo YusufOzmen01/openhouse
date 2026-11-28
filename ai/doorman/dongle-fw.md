@@ -5,10 +5,23 @@ nRF52840 Dongle (PCA10059 or compatible), tinyusb, polled main loop (no radio in
 joining/pairing, hopping, go-back-N, codec), `src/usb_descriptors.c`, `src/dongle.h` (`DONGLE_FW_VERSION`,
 VID/PID 6767:0727, command numbers).
 
-From `doorman/dongle-fw`, run `make check-nrf52833` to compile both banks and link and convert the
-install image for a 512 KiB flash / 128 KiB RAM target. This is a build check only. It uses the
-`833_uf2` layout (MBR, application at 0x1000, no SoftDevice) and has no receiver-specific pin map or
-board ID. Use a board-specific build for flashing. The default `make` still builds the shipping boards.
+## Boards (`doorman/boards/*.json`)
+
+One file per build; the file name is the board name. `doorman/tools/boards.py` turns them into
+`build/board_<name>.h` (passed with `-include`: BOARD_ID, DONGLE_PRODUCT, LED, FEM, REGOUT0, PAIR_PAGE,
+GPREGRET values), `build/boards.mk` (which boards to build, chip and layout) and the apps' table
+`src/common/doorman_boards.hpp` (checked in; CI runs `check-cpp`). Left-out fields take defaults.
+The flash layout follows from the fields: `idx` for the Index radio, `833_uf2` for an nRF52833, `sd` with a
+SoftDevice, else `std`. Ids 0-4 are openhouse's own boards (their own installer tiles); higher ids are listed
+under Other Dongles. A board with and without a SoftDevice shares one id (two files).
+How to add one: `doorman/boards/ADDING_DEVICES.md`. `make check-nrf52833` builds only the nRF52833 boards.
+
+## Packages: one zip per board
+
+`make` also writes `build/zips/<board>.zip` (`boards.py zip`): board.json (the board, the firmware version),
+the install image (install.uf2 or install.hex; image.bin for the Index radio), bank-a.bin and bank-b.bin.
+`scripts/stage-firmwares.py` puts them in `firmwares/dongle/`. CI's firmware job builds `firmwares/` once and
+the Linux and Windows jobs package that (OPENHOUSE_FIRMWARES); `scripts/build-all.sh` does the same locally.
 
 ## Two builds (same code, different flash base)
 
@@ -101,8 +114,8 @@ ceiling ≈ 8 devices per dongle (needs `DML_SLOTS` and the USB split changed); 
   the dongle manager's Update button and the installer do this; the bootloader is only for a first
   install or a rescue.
 * Build outputs: `doorman_dongle_<board>.hex/.uf2` (stub + payload, for bootloaders) and
-  `doorman_dongle_<board>_a.bin / _b.bin` (bank images); packages: `firmwares/dongle/bank/<board>-a.bin`.
-  Boards: sd, nosd, holyiot, pca10059, kuroshin. cmd 0x01 byte 59: the running bank (1 A, 2 B).
+  `doorman_dongle_<board>_a.bin / _b.bin` (bank images), packed into the board's zip.
+  cmd 0x01 byte 59: the running bank (1 A, 2 B).
 * Verified 2026-11-21: Pro Micro (sd) converted through UF2, two bank updates both ways, a bootloader
   flash of a different build won over the banks and a second one brought the first back; Kuroshin bank
   updates both ways; an update interrupted after the erase and half the writes left the old bank running.

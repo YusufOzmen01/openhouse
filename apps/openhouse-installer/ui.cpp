@@ -18,6 +18,7 @@
 #include <cstdlib>
 
 #include "common/dongle_bank.hpp"
+#include "common/dongle_firmware.hpp"
 #include "common/nordic_dfu.hpp"
 #include "common/ui_scale.hpp"
 #include "common/ui_theme.hpp"
@@ -646,17 +647,43 @@ float DeviceListReserve() {
          ImGui::GetFrameHeightWithSpacing() + st.ItemSpacing.y * 2;
 }
 
-// The image for a board on Nordic's DFU bootloader (DoormanDongleInfo::board).
-fs::path NordicImage(int board) {
-  return FirmwareFolder() / "dongle" / (board == 3 ? "doorman-kuroshin.hex" : board == 2 ? "doorman-pca10059.hex" : "doorman-holyiot.hex");
+// The board picked (DoormanDongleInfo::board) is on Nordic's open DFU bootloader.
+bool PickedNordicDfu(int board) {
+  const auto* b = lh::doorman_boards::Find(board, false);
+  return b && std::strcmp(b->bootloader, "nordic_dfu") == 0;
 }
 
-// The dongle firmware this package carries (firmwares/dongle/bank/version.txt), 0 if it has none.
-uint16_t PackagedDongleVersion() {
-  std::ifstream in(FirmwareFolder() / "dongle" / "bank" / "version.txt");
-  std::string text;
-  if (!(in >> text)) return 0;
-  try { return uint16_t(std::stoul(text, nullptr, 16)); } catch (...) { return 0; }
+// The package's dongle firmware: one zip per board (lh/dongle_firmware.hpp).
+fs::path DongleFolder() { return FirmwareFolder() / "dongle"; }
+
+// One file of a board's zip, written to the temp folder for the steps that take a file; empty if it's missing.
+fs::path Extracted(const lh::doorman_boards::Board& b, const std::string& entry) {
+  std::error_code ec;
+  const fs::path to = fs::temp_directory_path(ec) / ("openhouse-" + std::string(b.name) + "-" + entry);
+  return lh::dongle_firmware::Extract(DongleFolder(), b, entry, to) ? to : fs::path{};
+}
+
+// The image a board's bootloader installs (DoormanDongleInfo::board; softDevice: a UF2 bootloader that keeps one).
+fs::path InstallImage(int board, bool softDevice) {
+  const auto* b = lh::doorman_boards::Find(board, softDevice);
+  return b ? Extracted(*b, lh::doorman_boards::InstallEntry(*b)) : fs::path{};
+}
+
+// The image a self-update writes: its board's, for the bank it isn't running.
+std::vector<uint8_t> BankImage(const DoormanDongleInfo& d) {
+  std::vector<uint8_t> image;
+  if (const auto* b = d.Board()) lh::dongle_firmware::Read(DongleFolder(), *b, lh::doorman_boards::BankEntry(d.bank), &image);
+  return image;
+}
+
+// The dongle firmware this package carries (its boards' zips), 0 if it has none.
+uint16_t PackagedDongleVersion() { return lh::dongle_firmware::PackageVersion(DongleFolder()); }
+
+// The Index radio's image (its zip's image.bin).
+fs::path IndexImage() {
+  for (const auto& b : lh::doorman_boards::kBoards)
+    if (b.indexRadio) return Extracted(b, "image.bin");
+  return {};
 }
 
 // A device's radio is ours but not the packaged one.
@@ -693,9 +720,6 @@ bool HasUpdate(const DoormanDongleInfo& d) {
   return (packaged && d.firmware != packaged) || d.oldRadios > 0;
 }
 
-fs::path DongleImage(bool softDevice) {
-  return FirmwareFolder() / "dongle" / (softDevice ? "doorman-dongle-sd.uf2" : "doorman-dongle-nosd.uf2");
-}
 
 }  // namespace
 
@@ -811,6 +835,8 @@ void Ui::RefreshStatus() { status_ = steamvr_.root.empty() ? DriverStatus{} : Re
 void Ui::ShowForTest(const std::string& page) {
   if (page == "kuroshin") { Go(Page::Dongle); dongleBoard_ = 3; dongleStep_ = DongleStep::Detect; }
   else if (page == "dongle") Go(Page::Dongle);
+  else if (page == "others") { Go(Page::Dongle); dongleStep_ = DongleStep::Other; }
+  else if (page == "generic840") { Go(Page::Dongle); dongleBoard_ = 5; dongleStep_ = DongleStep::Detect; }
   else if (page == "holyiot") { Go(Page::Dongle); dongleBoard_ = 1; dongleStep_ = DongleStep::Detect; }
   else if (page == "nordic") { Go(Page::Dongle); dongleBoard_ = 2; dongleStep_ = DongleStep::Detect; }
   else if (page == "promicro") { Go(Page::Dongle); dongleBoard_ = 0; dongleStep_ = DongleStep::Detect; }
@@ -1696,10 +1722,11 @@ void Ui::WatchDongles(int board) {
   dongleStep_ = DongleStep::Detect;
   dongleSeen_.Start([board] {
     DongleSeen s;
-    if (board == 4) {
+    const auto* b = lh::doorman_boards::Find(board, false);
+    if (b && b->indexRadio) {
       s.indexRadios = FindIndexRadios();
       for (const auto& p : lh::dfu::FindValveBootloaders()) s.indexBootloaders.push_back(p.serial);
-    } else if (board) {
+    } else if (b && std::strcmp(b->bootloader, "nordic_dfu") == 0) {
       s.ports = lh::dfu::FindBootloaderPorts();
     } else {
       s.drives = FindUf2Drives();
@@ -1717,23 +1744,87 @@ void Ui::DonglePage() {
       ImGui::Dummy(ImVec2(0, ImGui::GetFontSize()));
       Prompt("Which dongle do you have?");
       const auto watch = [this](int board) { WatchDongles(board); };
-      // Board ids (DoormanDongleInfo::board) in tile order.
+      // Board ids (DoormanDongleInfo::board) in tile order; the last tile is the Other Dongles list.
       static constexpr int kBoards[] = {1, 2, 0, 3, 4};
-      const int tile = Tiles({{Icon::Dongle, "Holyiot 21017", "Nordic bootloader", Tint::None, "Recommended"},
-                              {Icon::Dongle, "Nordic PCA10059 Dongle", "Nordic bootloader"},
-                              {Icon::Dongle, "ProMicro nRF52840", "Adafruit bootloader. Soldering an antenna to the board is highly recommended"},
-                              {Icon::Dongle, "Kuroshin", "It needs to be put into DFU mode by opening the dongle and shorting two pins"},
-                              {Icon::Headset, "Valve Index", "The headset's own radio. Index only", Tint::Yellow}},
-                             ImGui::GetFontSize() * 15);
+      const int tile = TileGrid({{Icon::Dongle, "Holyiot 21017", "Nordic bootloader", Tint::None, "Recommended"},
+                                 {Icon::Dongle, "Nordic PCA10059 Dongle", "Nordic bootloader"},
+                                 {Icon::Dongle, "ProMicro nRF52840", "Adafruit bootloader. Soldering an antenna to the board is highly recommended"},
+                                 {Icon::Dongle, "Kuroshin", "It needs to be put into DFU mode by opening the dongle and shorting two pins"},
+                                 {Icon::Headset, "Valve Index", "The headset's own radio. Index only", Tint::Yellow},
+                                 {Icon::Dongle, "Other Dongles", "Generic and community-added dongles for nRF52840 and nRF52833. Not all dongles are tested"}},
+                                3);
       // The Index's radio is found by Valve's radio USB id, which other headsets' radios (Bigscreen
       // Beyond) and Valve's own dongles share: another headset's radio can be picked. Accepted first.
       if (tile == 4) {
         confirmedIndex_ = false;
         dongleStep_ = DongleStep::IndexWarning;
+      } else if (tile == 5) {
+        dongleStep_ = DongleStep::Other;
       } else if (tile >= 0) {
         watch(kBoards[tile]);
       }
       Back(Page::DoormanMenu);
+      return;
+    }
+    case DongleStep::Other: {
+      // Every board past openhouse's own (doorman/boards), one row per name and bootloader: a board built
+      // with and without a SoftDevice is one row, the bootloader's drive says which (INFO_UF2.TXT).
+      ImGui::Dummy(ImVec2(0, ImGui::GetFontSize()));
+      Prompt("Other Dongles");
+      const float fs = ImGui::GetFontSize();
+      struct Row { const lh::doorman_boards::Board* b; std::string layouts; };
+      std::vector<Row> rows;
+      for (const auto& b : lh::doorman_boards::kBoards) {
+        if (!lh::doorman_boards::Other(b)) continue;
+        const char* layout = std::strcmp(b.soc, "nrf52833") == 0 ? "833_uf2" : b.softdevice ? "sd" : "std";
+        auto it = std::find_if(rows.begin(), rows.end(), [&](const Row& r) {
+          return std::strcmp(r.b->display, b.display) == 0 && std::strcmp(r.b->bootloader, b.bootloader) == 0;
+        });
+        if (it == rows.end()) rows.push_back({&b, layout});
+        else it->layouts += std::string(", ") + layout;
+      }
+      // Column starts, as a share of the row's width.
+      static constexpr float kCol[] = {0.0f, 0.30f, 0.43f, 0.62f, 0.74f};
+      const float pad = fs * 0.8f;
+      const auto columns = [&](float x, float w, float y, const char* const* text, bool muted) {
+        for (int c = 0; c < 5; ++c) {
+          ImGui::SetCursorScreenPos(ImVec2(x + pad + (w - pad * 2) * kCol[c], y));
+          if (muted || c) ImGui::TextColored(muted ? kMuted : ImGui::GetStyleColorVec4(ImGuiCol_Text), "%s", text[c]);
+          else ImGui::TextUnformatted(text[c]);
+        }
+      };
+      {
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        static const char* const kHead[] = {"Name", "Chip", "Bootloader", "Layout", "Note"};
+        columns(at.x, ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize, at.y, kHead, true);
+        ImGui::SetCursorScreenPos(at);
+        ImGui::Dummy(ImVec2(0, fs * 1.2f));
+      }
+      ImGui::BeginChild("##others", ImVec2(0, ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 1.6f),
+                        ImGuiChildFlags_None);
+      const float rowH = fs * 2.2f, rounding = fs * 0.4f;
+      const float w = ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize;
+      ImDrawList* draw = ImGui::GetWindowDrawList();
+      for (const auto& r : rows) {
+        const auto& b = *r.b;
+        ImGui::PushID(b.name);
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        const bool pressed = ImGui::InvisibleButton("##row", ImVec2(w, rowH));
+        const bool hovered = ImGui::IsItemHovered();
+        if (hovered) draw->AddRectFilled(at, ImVec2(at.x + w, at.y + rowH), ImGui::GetColorU32(ImGuiCol_HeaderHovered), rounding);
+        draw->AddRect(at, ImVec2(at.x + w, at.y + rowH),
+                      ImGui::GetColorU32(hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Border), rounding, 0, fs * 0.08f);
+        const char* text[] = {b.display, std::strcmp(b.soc, "nrf52833") == 0 ? "nRF52833" : "nRF52840",
+                              std::strcmp(b.bootloader, "uf2") == 0 ? "Adafruit (UF2)" : "Nordic DFU",
+                              r.layouts.c_str(), b.note[0] ? b.note : "-"};
+        columns(at.x, w, at.y + (rowH - fs) * 0.5f, text, false);
+        ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + rowH));
+        ImGui::Dummy(ImVec2(0, fs * 0.3f));
+        ImGui::PopID();
+        if (pressed) WatchDongles(b.id);
+      }
+      ImGui::EndChild();
+      if (BackButton()) dongleStep_ = DongleStep::Board;
       return;
     }
     case DongleStep::IndexWarning: {
@@ -1755,7 +1846,11 @@ void Ui::DonglePage() {
         if (BackButton()) {
           dongleSeen_.Stop();
           if (indexRestoreOnly_) Go(Page::RestoreMenu);
-          else dongleStep_ = DongleStep::Board;
+          else {
+            // Back to the list it was picked from.
+            const auto* b = lh::doorman_boards::Find(dongleBoard_, false);
+            dongleStep_ = b && lh::doorman_boards::Other(*b) ? DongleStep::Other : DongleStep::Board;
+          }
         }
       };
       if (!DeviceAccess()) { back(); return; }
@@ -1764,8 +1859,9 @@ void Ui::DonglePage() {
                                                      : "One of the headset's two radios gets Doorman, the other stays with SteamVR")
               : dongleBoard_ == 3 ? "If it doesn't show up, open the dongle and briefly short pads 1 and 5 to put it in DFU mode"
               : dongleBoard_ == 1 ? "If it doesn't show up, bring a magnet close to the dongle's LED window to put it in DFU mode"
-              : dongleBoard_ ? "If it doesn't show up, press its RESET button to put it in DFU mode"
-                             : "If it doesn't show up, short the RST and GND pins twice to put it in DFU mode");
+              : dongleBoard_ == 0 ? "If it doesn't show up, short the RST and GND pins twice to put it in DFU mode"
+              : PickedNordicDfu(dongleBoard_) ? "If it doesn't show up, press its RESET button to put it in DFU mode"
+                                              : "If it doesn't show up, press its RESET button twice to put it in DFU mode");
       if (dongleBoard_ == 1 || dongleBoard_ == 2) {
         ImGui::Spacing();
         if (dongleBoard_ == 1) HolyiotMagnet();
@@ -1828,16 +1924,18 @@ void Ui::DonglePage() {
                     : "the dongle didn't show up after flashing, replug it and try again");
         return false;
       };
-      static const auto flashUf2 = [](Job& j, const Uf2Drive& drive) {
-        const fs::path image = DongleImage(drive.softDevice);
-        j.Log("Firmware: " + Utf8(image.filename()));
+      static const auto flashUf2 = [](Job& j, const Uf2Drive& drive, int board) {
+        const fs::path image = InstallImage(board, drive.softDevice);
+        if (image.empty()) { j.Fail("firmware not found in the firmwares folder"); return false; }
+        j.Log("Firmware: " + lh::doorman_boards::ZipName(*lh::doorman_boards::Find(board, drive.softDevice)));
         std::string error;
         if (!CopyUf2(drive, image, &error, [&](float f) { j.Status(f * 0.8f, "Flashing"); })) { j.Fail(error); return false; }
         return verify(j);
       };
       static const auto flashDfu = [](Job& j, const std::string& port, int board) {
-        const fs::path file = NordicImage(board);
-        j.Log("Firmware: " + Utf8(file.filename()));
+        const fs::path file = InstallImage(board, false);
+        if (file.empty()) { j.Fail("firmware not found in the firmwares folder"); return false; }
+        j.Log("Firmware: " + lh::doorman_boards::ZipName(*lh::doorman_boards::Find(board, false)));
         lh::dfu::Image image;
         std::string error;
         // App space of Nordic's open bootloader: after the MBR, below the pairing page and the bootloader.
@@ -1874,7 +1972,7 @@ void Ui::DonglePage() {
           confirmedIndexFlash_ = false;
           indexFlash_ = [serial, enter, restore, steam = Utf8(steamvr_.root)](Job& j) {
             const std::string package = IndexRadioPackage(steam);
-            const fs::path image = FirmwareFolder() / "dongle" / "doorman-index.bin";
+            const fs::path image = IndexImage();
             j.Log("Firmware: " + (restore ? "stock, from " + package.substr(package.find_last_of("/\\") + 1) : Utf8(image.filename())));
             if (!serial.empty()) j.Log("Radio: " + serial);
             const size_t stockBefore = FindIndexRadios().size();
@@ -1950,7 +2048,7 @@ void Ui::DonglePage() {
       }
       for (const auto& d : seen.drives) {
         const std::string label = d.name + (d.board.empty() ? "" : "  (" + d.board + ")");
-        if (BigButton(label.c_str(), ImGui::GetFontSize() * 34)) start([d](Job& j) { return flashUf2(j, d); });
+        if (BigButton(label.c_str(), ImGui::GetFontSize() * 34)) start([d, board = dongleBoard_](Job& j) { return flashUf2(j, d, board); });
       }
       for (const auto& port : seen.ports) {
         const std::string label = "Nordic DFU bootloader (" + port + ")";
@@ -1963,12 +2061,9 @@ void Ui::DonglePage() {
         const DoormanDongleInfo dongle = d;
         if (dongle.Banked()) {   // updates itself: the firmware for the bank it isn't running
           start([dongle](Job& j) {
-            const fs::path file = FirmwareFolder() / "dongle" / "bank" /
-                                  lh::dongle_bank::ImageName(dongle.board, dongle.softDeviceBuild, dongle.bank);
-            j.Log("Firmware: " + Utf8(file.filename()));
-            std::ifstream in(file, std::ios::binary);
-            std::vector<uint8_t> image((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            std::vector<uint8_t> image = BankImage(dongle);
             if (image.size() < 1024) { j.Fail("firmware not found in the firmwares folder"); return false; }
+            j.Log("Firmware: " + lh::doorman_boards::ZipName(*dongle.Board()) + ", " + lh::doorman_boards::BankEntry(dongle.bank));
             std::string error;
             if (!BankUpdate(dongle, std::move(image), [&](float f) { j.Status(f * 0.8f, "Flashing"); }, &error)) { j.Fail(error); return false; }
             std::this_thread::sleep_for(std::chrono::milliseconds(1500));   // it restarts into the new bank
@@ -1993,7 +2088,7 @@ void Ui::DonglePage() {
             } else {
               for (const auto& drive : FindUf2Drives())
                 if (std::none_of(drivesBefore.begin(), drivesBefore.end(), [&](const Uf2Drive& b) { return b.mount == drive.mount; }))
-                  return flashUf2(j, drive);
+                  return flashUf2(j, drive, dongle.board);
             }
           }
           j.Fail(dongle.NordicDfu() ? "the dongle didn't enter DFU mode, press its RESET button and try again"
@@ -2324,7 +2419,7 @@ void Ui::StartDongleUpdate(const std::vector<DongleSlot>& slots) {
     if (dongle.IndexRadio()) {   // through Valve's bootloader, with SteamVR's package as the reference
       set(-1, 1, "Updating");
       std::string error;
-      const fs::path image = FirmwareFolder() / "dongle" / "doorman-index.bin";
+      const fs::path image = IndexImage();
       if (FlashIndexRadio("", [dongle] { return RebootToBootloader(dongle); }, Utf8(image), IndexRadioPackage(Utf8(steamvr_.root)),
                           [&](float p, const std::string&) { j.Status((float(step) + p) / float(steps), "Updating the radio"); }, &error)) {
         for (int i = 0; i < 100; ++i) {
@@ -2344,10 +2439,7 @@ void Ui::StartDongleUpdate(const std::vector<DongleSlot>& slots) {
       j.Fail("the dongle wasn't updated");
       return false;
     }
-    const fs::path file = FirmwareFolder() / "dongle" / "bank" / lh::dongle_bank::ImageName(dongle.board, dongle.softDeviceBuild, dongle.bank);
-    std::ifstream in(file, std::ios::binary);
-    const std::vector<uint8_t> image((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    if (image.size() < 1024) { set(-1, 3, "Firmware not found in the firmwares folder"); j.Fail("the dongle wasn't updated"); return false; }
+    if (BankImage(dongle).size() < 1024) { set(-1, 3, "Firmware not found in the firmwares folder"); j.Fail("the dongle wasn't updated"); return false; }
     for (int attempt = 1; attempt <= 3; ++attempt) {
       set(-1, 1, attempt == 1 ? "Updating" : "Updating, try " + std::to_string(attempt) + " of 3");
       // Its bank changes with every update: find it again for the current one.
@@ -2356,9 +2448,7 @@ void Ui::StartDongleUpdate(const std::vector<DongleSlot>& slots) {
         if (d.serial == dongle.serial) now = d;
       if (now.firmware == packaged) { set(-1, 2, "Updated"); remember(); return true; }
       std::string error;
-      const fs::path f = FirmwareFolder() / "dongle" / "bank" / lh::dongle_bank::ImageName(now.board, now.softDeviceBuild, now.bank);
-      std::ifstream fin(f, std::ios::binary);
-      std::vector<uint8_t> img((std::istreambuf_iterator<char>(fin)), std::istreambuf_iterator<char>());
+      std::vector<uint8_t> img = BankImage(now);
       if (BankUpdate(now, std::move(img), [&](float p) { j.Status((float(step) + p) / float(steps), "Updating the dongle"); }, &error)) {
         for (int i = 0; i < 100; ++i) {   // it restarts into the new bank
           std::this_thread::sleep_for(std::chrono::milliseconds(200));

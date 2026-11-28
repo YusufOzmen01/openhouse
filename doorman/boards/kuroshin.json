@@ -1,0 +1,10 @@
+{
+  "id": 3,
+  "display": "Kuroshin",
+  "product": "Dongle Kuroshin",
+  "note": "It needs to be put into DFU mode by opening the dongle and shorting two pins",
+  "soc": "nrf52840",
+  "bootloader": "nordic_dfu",
+  "dfu_by_pads": true,
+  "pair_page": "0xDA000"
+}

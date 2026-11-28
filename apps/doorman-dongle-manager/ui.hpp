@@ -3,6 +3,7 @@
 // Same look as openhouse-overlay (pixel font, sidebar pages, status bar).
 #pragma once
 #include <filesystem>
+#include "common/doorman_boards.hpp"
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -78,8 +79,9 @@ class Ui {
   std::string updateStatus_;
   bool updateError_ = false;
   void StartUpdate(std::shared_ptr<Dongle> d, const std::string& file, bool nordicDfu);
-  void StartBankUpdate(std::shared_ptr<Dongle> d, const std::filesystem::path& file);
-  static std::filesystem::path PackagedBankImage(const std::string& name);
+  void StartBankUpdate(std::shared_ptr<Dongle> d, const std::filesystem::path& dir, const lh::doorman_boards::Board& board,
+                       const std::string& entry);
+  static std::filesystem::path PackagedDongleDir();
 };
 
 }  // namespace openhouse::dongle

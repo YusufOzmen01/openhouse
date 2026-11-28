@@ -24,24 +24,23 @@
 #define BANK_A          0x00026000u
 #define BANK_B          0x00026000u
 #define BANK_SIZE       0x000B9000u
-#define PAIR_PAGE       0x000DF000u        /* last page before Valve's bootloader (0xE0000) */
 #elif BANK_LAYOUT_833_UF2
 /* UF2 without SoftDevice, app at 0x1000. Keep the original receiver storage at 0x6E000. */
 #define BANK_A          0x00010000u
 #define BANK_B          0x00030000u
 #define BANK_SIZE       0x00020000u
-#define PAIR_PAGE       0x0005F000u
 #elif BANK_LAYOUT_SD
 #define BANK_A          0x00030000u
 #define BANK_B          0x0008E000u
 #define BANK_SIZE       0x0005E000u
-#define PAIR_PAGE       0x000EC000u
 #else
 #define BANK_A          0x00010000u
 #define BANK_B          0x00070000u
 #define BANK_SIZE       0x00060000u
-#define PAIR_PAGE       (BOARD_NORDIC_DFU ? 0x000DA000u : 0x000EC000u)
 #endif
+/* The pairing page: the board's (doorman/boards): Index 0xDF000 (last before Valve's bootloader at 0xE0000),
+   833 0x5F000, Nordic DFU boards 0xDA000 (Nordic's bootloader is at 0xE0000), others 0xEC000. */
+#define PAIR_PAGE       BOARD_PAIR_PAGE
 #define BANK_IMAGE_OFS  0x1000u            /* header page, then the image */
 #define BANK_IMAGE_MAX  (BANK_SIZE - BANK_IMAGE_OFS)
 #define BANK_MAGIC      0x4B42484Fu        /* "OHBK" */

@@ -1,0 +1,11 @@
+{
+  "id": 4,
+  "display": "Valve Index",
+  "product": "Valve Index Radio",
+  "note": "The headset's own radio. Index only",
+  "kind": "index_radio",
+  "soc": "nrf52840",
+  "bootloader": "valve_serial",
+  "pair_page": "0xDF000",
+  "softdevice": true
+}

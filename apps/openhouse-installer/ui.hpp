@@ -206,7 +206,7 @@ class Ui {
   bool sawUnplug_ = false;
 
   // Dongle flow
-  enum class DongleStep { Board, IndexWarning, Detect, Flashing, Done } dongleStep_ = DongleStep::Board;
+  enum class DongleStep { Board, Other, IndexWarning, Detect, Flashing, Done } dongleStep_ = DongleStep::Board;
   bool confirmedIndex_ = false;        // the Index warning accepted
   bool confirmedIndexFlash_ = false;   // and again when flashing it
   int dongleBoard_ = 0;  // board picked: 0 UF2, 1 Holyiot 21017, 2 PCA10059 (DoormanDongleInfo::board)

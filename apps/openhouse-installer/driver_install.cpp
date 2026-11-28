@@ -524,8 +524,8 @@ void InstallDriver(const fs::path& steamvr, const InstallOptions& options, const
     if (const fs::path o = tools / (std::string("openhouse-overlay") + kExe); fs::exists(o, ec)) CopyOver(o, saved / "apps" / o.filename());
     if (const fs::path b = tools / kBleLibrary; fs::exists(b, ec)) CopyOver(b, saved / "apps" / b.filename());
     // The dongle and radio firmware, for the overlay's firmware warning (it starts this copy with
-    // --dongles): the over-USB/over-the-air images only, not the bootloader ones.
-    for (const char* sub : {"dongle/bank", "radio"}) {
+    // --dongles): the dongles' zips (each also has its bootloader image) and the radio images.
+    for (const char* sub : {"dongle", "radio"}) {
       const fs::path from = here / "firmwares" / sub;
       if (!fs::is_directory(from, ec)) continue;
       fs::create_directories(saved / "firmwares" / sub, ec);

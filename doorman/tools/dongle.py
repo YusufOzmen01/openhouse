@@ -16,7 +16,7 @@
   DONGLE=Kuroshin dongle.py ...      with several dongles: the one whose name or serial has this
 Only touches 6767:0727 devices and UF2 drives with INFO_UF2.TXT; never Valve dongles (28de:*).
 """
-import glob, os, shutil, struct, subprocess, sys, time
+import glob, os, pathlib, shutil, struct, subprocess, sys, time
 import hid
 
 VID, PID = 0x6767, 0x0727
@@ -168,6 +168,22 @@ def channels():
         print(f"  {2400+d[2+k]} MHz  {'on ' if m >> k & 1 else 'OFF'}  loss {d[18+k]:3d}%")
     print("join requests heard", struct.unpack_from("<I", d, 34)[0], " network base", hex(struct.unpack_from("<I", d, 38)[0]))
 
+def board_name(board_id, softdevice):
+    """The board a dongle runs (cmd 0x01 byte 57, byte 6), from doorman/boards/*.json."""
+    import json
+    found = None
+    for p in sorted(pathlib.Path(__file__).resolve().parent.parent.joinpath("boards").glob("*.json")):
+        b = json.loads(p.read_text())
+        if b.get("kind") == "check" or b["id"] != board_id:
+            continue
+        if bool(b.get("softdevice")) == softdevice:
+            return p.stem
+        found = found or p.stem
+    if not found:
+        sys.exit(f"board id {board_id} isn't in doorman/boards")
+    return found
+
+
 def bank_update(folder):
     """Self-update of a two-bank board (dongle-fw/src/banks.h): no bootloader, no reset pin."""
     import zlib
@@ -176,7 +192,7 @@ def bank_update(folder):
     if d[59] not in (1, 2): sys.exit("older firmware without banks: update it through its bootloader (flash)")
     running = "a" if d[59] == 1 else "b"
     target = "b" if running == "a" else "a"
-    board = {1: "holyiot", 2: "pca10059", 3: "kuroshin"}.get(d[57], "sd" if d[6] else "nosd")
+    board = board_name(d[57], bool(d[6]))
     img = open(os.path.join(folder, f"doorman_dongle_{board}_{target}.bin"), "rb").read()
     img += b"\xff" * (-len(img) % 4)
     print(f"{board}: fw {d[4] | d[5] << 8:#06x} in bank {running.upper()}; writing {len(img)} bytes to bank {target.upper()}")

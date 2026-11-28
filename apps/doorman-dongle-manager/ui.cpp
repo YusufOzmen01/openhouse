@@ -13,6 +13,7 @@
 #include <fstream>
 
 #include "common/dongle_bank.hpp"
+#include "common/dongle_firmware.hpp"
 #include "common/nordic_dfu.hpp"
 #include "common/ui_scale.hpp"
 #include "common/ui_theme.hpp"
@@ -894,9 +895,9 @@ void Ui::Firmware(const DongleState& d) {
     };
     char t[96];
     row("Dongle", d.serial);
-    std::snprintf(t, sizeof t, "%d (%s build%s)", d.firmware,
-                  d.board == 4 ? "Valve Index radio" : d.board == 1 ? "Holyiot 21017" : d.board == 2 ? "PCA10059" : d.board == 3 ? (d.bank == 2 ? "Kuroshin, bank B" : "Kuroshin, bank A") : d.softdeviceVariant ? "Nordic bootloader" : "bare",
-                  d.watchdog ? ", watchdog" : "");
+    const auto* boardInfo = lh::doorman_boards::Find(d.board, d.softdeviceVariant);
+    std::snprintf(t, sizeof t, "%d (%s%s%s)", d.firmware, boardInfo ? boardInfo->display : "unknown board",
+                  d.bank == 1 ? ", bank A" : d.bank == 2 ? ", bank B" : "", d.watchdog ? ", watchdog" : "");
     row("Firmware", t);
     row("Up for", Uptime(d.uptimeMs));
     std::snprintf(t, sizeof t, "0x%X", d.resetReason);
@@ -924,20 +925,22 @@ void Ui::Firmware(const DongleState& d) {
   if (d.IndexRadio()) {
     ImGui::TextWrapped("Update it from openhouse-installer: Update Dongles");
   } else if (d.Banked()) {
-    // Updates itself: the packaged firmware for the bank that isn't running.
-    const fs::path image = PackagedBankImage(lh::dongle_bank::ImageName(d.board, d.softdeviceVariant, d.bank));
-    if (image.empty()) ImGui::TextColored(kWarn, "Firmware not found next to the app");
-    else ImGui::TextDisabled("%s", lh::platform::PathUtf8(image.filename()).c_str());
-    ImGui::BeginDisabled(image.empty() || updating_);
+    // Updates itself: the packaged firmware (its board's zip) for the bank that isn't running.
+    const auto* board = lh::doorman_boards::Find(d.board, d.softdeviceVariant);
+    const fs::path dir = PackagedDongleDir();
+    const bool have = board && !dir.empty() && lh::dongle_firmware::Has(dir, *board);
+    if (!have) ImGui::TextColored(kWarn, "Firmware not found next to the app");
+    else ImGui::TextDisabled("%s", lh::doorman_boards::ZipName(*board).c_str());
+    ImGui::BeginDisabled(!have || updating_);
     if (TintButton(updating_ ? "Updating..." : "Update", kAccent, ImGui::GetFontSize() * 12)) ImGui::OpenPopup("Update?");
     ImGui::EndDisabled();
-    if (Confirm("Update?", "Every device drops for a few seconds")) StartBankUpdate(dongle, image);
+    if (have && Confirm("Update?", "Every device drops for a few seconds"))
+      StartBankUpdate(dongle, dir, *board, lh::doorman_boards::BankEntry(d.bank));
   } else {
-    // Older firmware: through its bootloader, from a file.
-    if (d.NordicDfu())
-      ImGui::TextWrapped("Pick %s", d.board == 2 ? "doorman-pca10059.hex" : "doorman-holyiot.hex");
-    else
-      ImGui::TextWrapped("Pick %s", d.softdeviceVariant ? "doorman-dongle-sd.uf2" : "doorman-dongle-nosd.uf2");
+    // Older firmware: through its bootloader, from a file (the install image in its board's zip).
+    const auto* board = lh::doorman_boards::Find(d.board, d.softdeviceVariant);
+    if (board)
+      ImGui::TextWrapped("Pick %s from %s", lh::doorman_boards::InstallEntry(*board), lh::doorman_boards::ZipName(*board).c_str());
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - ImGui::GetFontSize() * 13);
     ImGui::InputTextWithHint("##uf2", d.NordicDfu() ? "path to the .hex file" : "path to the .uf2 file", firmwarePath_, sizeof firmwarePath_);
     ImGui::SameLine();
@@ -953,8 +956,8 @@ void Ui::Firmware(const DongleState& d) {
   }
 }
 
-// The package's firmwares/dongle/bank/<name>: this app runs from the package's apps/, or its root.
-fs::path Ui::PackagedBankImage(const std::string& name) {
+// The package's firmwares/dongle/ (one zip per board): this app runs from the package's apps/, or its root.
+fs::path Ui::PackagedDongleDir() {
   std::error_code ec;
 #ifdef _WIN32
   wchar_t self[MAX_PATH * 2]{};
@@ -965,14 +968,15 @@ fs::path Ui::PackagedBankImage(const std::string& name) {
   if (ec) dir = fs::current_path();
 #endif
   for (const fs::path& base : {dir, dir.parent_path()}) {
-    const fs::path p = base / "firmwares" / "dongle" / "bank" / name;
-    if (fs::exists(p, ec)) return p;
+    const fs::path p = base / "firmwares" / "dongle";
+    if (fs::is_directory(p, ec)) return p;
   }
   return {};
 }
 
 // Updates itself: the image for the bank that isn't running goes over USB (lh/dongle_bank.hpp).
-void Ui::StartBankUpdate(std::shared_ptr<Dongle> dongle, const fs::path& file) {
+void Ui::StartBankUpdate(std::shared_ptr<Dongle> dongle, const fs::path& dir, const lh::doorman_boards::Board& board,
+                         const std::string& entry) {
   if (updating_) return;
   if (updater_.joinable()) updater_.join();
   const auto set = [this](const std::string& s, bool error = false) {
@@ -980,9 +984,11 @@ void Ui::StartBankUpdate(std::shared_ptr<Dongle> dongle, const fs::path& file) {
     updateStatus_ = s;
     updateError_ = error;
   };
-  std::ifstream in(file, std::ios::binary);
-  std::vector<uint8_t> image((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-  if (image.size() < 1024) { set("Can't read " + lh::platform::PathUtf8(file), true); return; }
+  std::vector<uint8_t> image;
+  if (!lh::dongle_firmware::Read(dir, board, entry, &image) || image.size() < 1024) {
+    set("Can't read " + entry + " from " + lh::doorman_boards::ZipName(board), true);
+    return;
+  }
   updating_ = true;
   set("Writing the firmware...");
   dongle->BankUpdate(std::move(image),

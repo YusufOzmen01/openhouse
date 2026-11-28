@@ -21,40 +21,10 @@ enum {
 };
 enum { ST_OK = 0, ST_BAD_CMD = 1, ST_BAD_ARG = 2, ST_TIMEOUT = 3 };
 
-/* Boards on Nordic's open USB DFU bootloader (not UF2): Holyiot 21017 (amplifier) and Nordic's own
-   nRF52840 Dongle PCA10059. Same flash layout, same update path. */
-#ifndef BOARD_HOLYIOT
-#define BOARD_HOLYIOT 0
-#endif
-#ifndef BOARD_PCA10059
-#define BOARD_PCA10059 0
-#endif
-/* Kuroshin: PCA10059-like; its bootloader can't be entered from software (pin reset only). Every board
-   updates itself over USB anyway (banks.h, commands 0x40-0x42). */
-#ifndef BOARD_KUROSHIN
-#define BOARD_KUROSHIN 0
-#endif
-/* Valve Index HMD radio ("gravidongle"): nRF52840 + S140 6.1.1, app at 0x26000, Valve's
-   serial-DFU bootloader at 0xE0000.  Same USB/DFU mechanisms as the Nordic-DFU boards. */
-#ifndef BOARD_IDX
-#define BOARD_IDX 0
-#endif
-#define BOARD_NORDIC_DFU (BOARD_HOLYIOT || BOARD_PCA10059 || BOARD_KUROSHIN || BOARD_IDX)
-#define BOARD_ID (BOARD_HOLYIOT ? 1 : BOARD_PCA10059 ? 2 : BOARD_KUROSHIN ? 3 : BOARD_IDX ? 4 : 0)   /* cmd 0x01 byte 57: 4 the Index HMD radio */
-/* USB product string: the board this image is for. Host code matches the "Doorman " prefix (6767:0727). */
-#define DONGLE_PRODUCT (BOARD_HOLYIOT ? "Doorman Dongle Holyiot" : BOARD_PCA10059 ? "Doorman Dongle PCA10059" \
-                        : BOARD_KUROSHIN ? "Doorman Dongle Kuroshin" : BOARD_IDX ? "Doorman Valve Index Radio" \
-                        : "Doorman Dongle Pro Micro")
-
-/* Adafruit nRF52 bootloader magic values in NRF_POWER->GPREGRET */
-#if BOARD_NORDIC_DFU
-#define GPREGRET_UF2_DFU     0xB1   /* Nordic open USB DFU bootloader (nRF Connect / nrfutil) */
-#else
-#define GPREGRET_UF2_DFU     0x57
-#endif
-#if BOARD_IDX
-/* Valve's nRF5 SDK secure bootloader: BOOTLOADER_DFU_GPREGRET (0xB0) | START (0x01). */
-#define GPREGRET_SERIAL_DFU  0xB1
-#else
-#define GPREGRET_SERIAL_DFU  0x4E
+/* The board: build/board_<name>.h, made from doorman/boards/<name>.json (doorman/tools/boards.py) and
+   passed with -include. It names the board (BOARD_ID: cmd 0x01 byte 57, DONGLE_PRODUCT: the USB product
+   string, which host code matches by its "Doorman " prefix), its flash layout, its bootloader's GPREGRET
+   values (GPREGRET_UF2_DFU, GPREGRET_SERIAL_DFU) and its hardware (BOARD_HAS_LED, BOARD_HAS_FEM, ...). */
+#ifndef BOARD_NAME
+#error "no board header: build through the Makefile (-include build/board_<name>.h)"
 #endif

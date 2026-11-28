@@ -1,0 +1,14 @@
+{
+  "id": 2,
+  "display": "Nordic PCA10059 Dongle",
+  "product": "Dongle PCA10059",
+  "note": "Nordic bootloader",
+  "soc": "nrf52840",
+  "bootloader": "nordic_dfu",
+  "led": {
+    "pin": "P0.06",
+    "active_low": true
+  },
+  "regout0_3v0": true,
+  "pair_page": "0xDA000"
+}

@@ -1,0 +1,15 @@
+{
+  "id": 0,
+  "display": "ProMicro nRF52840",
+  "product": "Dongle Pro Micro",
+  "note": "Adafruit bootloader. Soldering an antenna to the board is highly recommended",
+  "soc": "nrf52840",
+  "bootloader": "uf2",
+  "led": {
+    "pin": "P0.15",
+    "active_low": false
+  },
+  "pair_page": "0xEC000",
+  "install_name": "doorman-dongle-sd.uf2",
+  "softdevice": true
+}

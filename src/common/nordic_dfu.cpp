@@ -1,4 +1,5 @@
 #include "nordic_dfu.hpp"
+#include "platform/platform.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -643,7 +644,7 @@ bool ValveInitPacket(const std::vector<uint8_t>& dat, uint32_t version, const st
 }
 
 bool ReadZipEntry(const std::string& zip, const std::string& name, std::vector<uint8_t>* out) {
-  std::ifstream in(zip, std::ios::binary);
+  std::ifstream in(lh::platform::FsPath(zip), std::ios::binary);   // UTF-8 path (a user folder with non-ASCII letters)
   const std::vector<uint8_t> z((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
   auto u16 = [&](size_t o) { return o + 2 <= z.size() ? uint32_t(z[o] | z[o + 1] << 8) : 0u; };
   auto u32 = [&](size_t o) { return o + 4 <= z.size() ? Get32(z.data() + o) : 0u; };
