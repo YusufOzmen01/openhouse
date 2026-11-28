@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -53,6 +54,32 @@ struct Receiver {
   int firmware = 0;                            // Doorman: the dongle's firmware, 0 unknown
   uint32_t radio = 0;                          // Doorman: the device's radio firmware, 0 unknown
   bool firmwareOld = false, radioOld = false;  // older than what the driver came with
+  // On a main with repeaters in use (else -1): answers per second taken from a repeater, their share of
+  // the slot's answers (%), and the loss there would be without them
+  double viaRepeater = -1, viaRepeaterShare = -1, lossAlone = -1;
+};
+
+// A Doorman dongle's repeater role and status. Only dongles whose firmware has repeaters are listed.
+struct Dongle {
+  std::string serial, role, netBase;   // role "main" or "repeater"
+  int board = -1;                      // 0 Pro Micro, 1 Holyiot, 2 PCA10059, 3 Kuroshin
+  bool autoRole = false;               // repeater: on its own, a dongle again once it pairs or its device turns on
+  struct Repeater {
+    int id = 0; bool answering = false; double lastAnswer = -1, asksPerSec = 0, answersPerSec = 0;
+    bool wireless = false;             // joined on its own over the air: what it said of itself
+    std::string serial;                // 8-hex short serial, "" unknown
+    int board = -1, firmware = 0, state = -1, hearsMainRssi = 0, heardRssi = 0;   // state: 0 looking, 1 standby, 2 relaying, 3 weak
+  };
+  std::vector<Repeater> repeaters;     // main: the repeaters it uses
+  bool relaying = false;               // main: using them now
+  int uselessFor = 0;
+  int state = -1;                      // repeater: its LED state
+  int repeaterId = 0;                  // repeater: its id, and its main's serial if that's plugged in here too
+  std::string main, mainBase;
+  bool following = false;
+  int mainRssi = 0;
+  struct Heard { int slot = 0; double perSec = 0; int rssi = 0; };
+  std::vector<Heard> heard;
 };
 
 struct Room {
@@ -69,6 +96,7 @@ struct State {
   std::vector<Device> devices;
   std::vector<Base> bases;
   std::vector<Receiver> receivers;
+  std::map<std::string, Dongle> dongles;   // by dongle serial
   std::string settingsJson = "{}";  // the driver's settings (lh/telemetry.hpp), as sent
 };
 

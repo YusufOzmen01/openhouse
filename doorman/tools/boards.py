@@ -20,7 +20,9 @@ build/doorman_dongle_<name>*, its zip <name>.zip):
               (banks.h, ld/) follows from it, the SoC and the kind: sd with one, std without, the nRF52833's
               own addresses (833_uf2), the Index radio's single image (idx).
   bootloader  uf2 (Adafruit) | nordic_dfu (Nordic's open USB DFU) | valve_serial (Valve's radio DFU)
-  led         {"pin": "P0.06", "active_low": true}, or left out: a board whose LED isn't known drives no pin
+  led         {"pin": "P0.06", "active_low": true}, or left out: a board whose LED isn't known drives no pin.
+              "rgb": ["P0.08", "P1.09", "P0.12"] adds an RGB LED (red, green, blue; same active_low): it shows
+              the status and the plain LED stays off
   fem         {"ctx": "P0.24", "crx": "P0.22", "txpower": "Neg4dBm"}: a SKY66112-style front-end amplifier
   regout0_3v0 sets the GPIO supply to 3.0 V once (UICR REGOUT0), for a board running off VDDH
   pair_page   the flash page that keeps pairings
@@ -108,6 +110,14 @@ def header(b):
         port, n = pin(b, led['pin'], 'led pin')
         lines += [f'#define BOARD_LED_PORT {port}', f'#define BOARD_LED_PIN {n}',
                   f'#define BOARD_LED_ACTIVE_LOW {int(led["active_low"])}']
+    rgb = (led or {}).get('rgb')
+    if rgb is not None and len(rgb) != 3:
+        sys.exit(f'{b["name"]}: led rgb takes 3 pins (red, green, blue)')
+    lines.append(f'#define BOARD_HAS_RGB {int(rgb is not None)}')
+    if rgb is not None:   # PWM PSEL takes port * 32 + pin
+        for c, p in zip('RGB', rgb):
+            port, n = pin(b, p, 'led rgb')
+            lines.append(f'#define BOARD_RGB_{c}_PIN {port * 32 + n}')
     lines.append(f'#define BOARD_HAS_FEM {int(fem is not None)}')
     if fem is not None:   # GPIOTE takes port * 32 + pin
         ctx, crx = pin(b, fem['ctx'], 'fem ctx'), pin(b, fem['crx'], 'fem crx')

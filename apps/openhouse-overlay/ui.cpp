@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <set>
 
 #include "common/tracker_names.hpp"
 #include "common/ui_name_fonts.hpp"
@@ -27,6 +28,7 @@ namespace {
 using json = nlohmann::json;
 using viewer::Base;
 using viewer::Device;
+using viewer::Dongle;
 using viewer::State;
 using viewer::Receiver;
 
@@ -288,6 +290,7 @@ void Ui::Draw(float width, float height) {
   ImGui::Begin("openhouse", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
                                          ImGuiWindowFlags_NoScrollbar);
   lh::ui::Snow(ImGui::GetWindowDrawList(), ImVec2(0, 0), ImVec2(width, height));
+  CheckRepeaters(client_.Current());
   ReplacedBanner();
   const float statusHeight = ImGui::GetFrameHeightWithSpacing() + 4 * lh::ui::Scale();
   const float body = ImGui::GetContentRegionAvail().y - statusHeight;
@@ -967,11 +970,12 @@ void Ui::Bases() {
 
 namespace {
 // Signal from the weaker side of the link: 4 bars at -55 dBm or better, none at -85 or worse.
-int SignalBars(const Receiver& r) {
-  const int w = std::min(r.rssiDongle ? r.rssiDongle : 0, r.rssiDevice ? r.rssiDevice : 0);
+int BarsFor(int a, int b) {
+  const int w = std::min(a ? a : 0, b ? b : 0);
   if (!w) return -1;
   return w >= -55 ? 4 : w >= -65 ? 3 : w >= -75 ? 2 : w >= -85 ? 1 : 0;
 }
+int SignalBars(const Receiver& r) { return BarsFor(r.rssiDongle, r.rssiDevice); }
 void Bars(int n) {
   const float h = ImGui::GetTextLineHeight(), bw = h * 0.22f, gap = h * 0.1f;
   const ImVec2 p = ImGui::GetCursorScreenPos();
@@ -985,7 +989,139 @@ void Bars(int n) {
   ImGui::Dummy(ImVec2(4 * bw + 3 * gap, h));
 }
 ImVec4 LossColor(double loss) { return loss < 5 ? kGood : loss < 15 ? kWarn : kBad; }
+// An icon the size of a text line, inline.
+void InlineIcon(lh::ui::Icon icon, const ImVec4& color) {
+  const float s = ImGui::GetTextLineHeight();
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  lh::ui::DrawIcon(ImGui::GetWindowDrawList(), icon, ImVec2(p.x + s / 2, p.y + s / 2), s * 0.85f, ImGui::GetColorU32(color));
+  ImGui::Dummy(ImVec2(s, s));
+  ImGui::SameLine();
+}
+const char* BoardName(int board) {
+  switch (board) {
+    case 0: return "Pro Micro";
+    case 1: return "Holyiot";
+    case 2: return "PCA10059";
+    case 3: return "Kuroshin";
+    default: return "Dongle";
+  }
+}
+// "OHDG-1B0DBC9CC3294DA2" -> "1B0DBC9C"
+std::string ShortDongle(const std::string& serial) {
+  const size_t dash = serial.find('-');
+  const std::string hex = dash == std::string::npos ? serial : serial.substr(dash + 1);
+  return hex.substr(0, 8);
+}
+std::string DongleName(int board, const std::string& serial) { return std::string(BoardName(board)) + " " + ShortDongle(serial); }
+// Weak at or below this (the weaker way of the repeater's link), or when it answers under kWeakAnswered of
+// what it's asked while relaying: at about -70 dBm a repeater answered only 55-65 %.
+constexpr int kWeakDbm = -75;
+constexpr double kWeakAnswered = 0.75;
 }  // namespace
+
+// Every repeater, wired (plugged in here, running as one) or wireless (joined a main over the air), with how
+// it's doing in one word.
+std::vector<Ui::RepeaterView> Ui::Repeaters(const State& s) const {
+  std::vector<RepeaterView> out;
+  auto mainName = [&](const std::string& netBase) -> std::string {
+    for (const auto& [serial, d] : s.dongles) if (d.role == "main" && d.netBase == netBase) return DongleName(d.board, serial);
+    return "";
+  };
+  std::set<std::string> plugged;   // short serials of repeaters plugged in here
+  for (const auto& [serial, d] : s.dongles) {
+    if (d.role != "repeater") continue;
+    RepeaterView v;
+    v.key = ShortDongle(serial); v.name = DongleName(d.board, serial); v.wired = true;
+    v.main = d.main.empty() ? mainName(d.mainBase) : DongleName(s.dongles.count(d.main) ? s.dongles.at(d.main).board : -1, d.main);
+    v.hearsMain = d.mainRssi;
+    v.state = d.state >= 0 ? d.state : d.following ? 1 : 0;
+    plugged.insert(v.key);
+    out.push_back(std::move(v));
+  }
+  for (const auto& [serial, d] : s.dongles) {
+    if (d.role != "main") continue;
+    for (const auto& p : d.repeaters) {
+      RepeaterView* v = nullptr;
+      if (!p.serial.empty() && plugged.count(p.serial))
+        for (auto& o : out) if (o.key == p.serial) v = &o;
+      if (!v) {
+        out.push_back({});
+        v = &out.back();
+        v->key = p.serial.empty() ? serial + "/" + std::to_string(p.id) : p.serial;
+        v->name = p.serial.empty() ? "Repeater " + std::to_string(p.id + 1) : DongleName(p.board, p.serial);
+        v->wired = false;
+        v->hearsMain = p.hearsMainRssi;
+        v->state = p.wireless ? p.state : -1;
+      }
+      v->main = DongleName(d.board, serial);
+      v->heard = p.heardRssi;
+      v->answersPerSec = p.answersPerSec;
+      v->answeredShare = p.asksPerSec >= 5 ? p.answersPerSec / p.asksPerSec : -1;
+      v->notAnswering = !p.answering && p.asksPerSec > 0;
+      v->useless = d.uselessFor > 0;
+      v->relaying = d.relaying;
+    }
+  }
+  for (auto& v : out) {
+    const int w = std::min(v.hearsMain ? v.hearsMain : 0, v.heard ? v.heard : 0);
+    v.weak = v.state == 3 || (w && w <= kWeakDbm) || (v.relaying && v.answeredShare >= 0 && v.answeredShare < kWeakAnswered);
+  }
+  return out;
+}
+
+// One row of the repeaters table: name, its dongle, status, signal.
+void Ui::RepeaterLine(const RepeaterView& v) {
+  const float em = ImGui::GetFontSize();
+  ImGui::TableNextRow();
+  ImGui::TableNextColumn();
+  InlineIcon(v.wired ? lh::ui::Icon::Wire : lh::ui::Icon::Wireless, kOff);
+  ImGui::TextUnformatted(v.name.c_str());
+  ImGui::TableNextColumn();
+  if (v.main.empty()) ImGui::TextDisabled("-"); else ImGui::TextDisabled("for %s", v.main.c_str());
+  ImGui::TableNextColumn();
+  ImVec4 c = kInfo;
+  std::string word = "Standby";
+  if (v.state == 0) { c = kWarn; word = "Looking for a dongle"; }
+  else if (v.notAnswering) { c = kBad; word = "Not answering"; }
+  else if (v.weak) { c = kWarn; word = "Weak signal, move it closer"; }
+  else if (v.useless) { c = kWarn; word = "Not helping here"; }
+  else if (v.state == 2 || v.relaying) { c = kGood; word = "Relaying"; }
+  Dot(c, em * 0.28f);
+  ImGui::TextColored(c, "%s", word.c_str());
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+    std::string t = v.wired ? "Plugged in here" : "Wireless";
+    if (!v.main.empty()) t += ", for " + v.main;
+    if (v.hearsMain) t += "\nHears the dongle at " + std::to_string(v.hearsMain) + " dBm";
+    if (v.heard) t += "\nHeard by the dongle at " + std::to_string(v.heard) + " dBm";
+    if (v.relaying) {
+      char b[80];
+      std::snprintf(b, sizeof b, "\n%.0f answers/s back", v.answersPerSec);
+      t += b;
+      if (v.answeredShare >= 0) { std::snprintf(b, sizeof b, ", answers %.0f%% of what it's asked", 100 * v.answeredShare); t += b; }
+    }
+    else t += "\nStandby: the devices lose nothing, so it isn't needed";
+    ImGui::SetTooltip("%s", t.c_str());
+  }
+  ImGui::TableNextColumn();
+  const int bars = BarsFor(v.hearsMain, v.heard);
+  if (bars >= 0) Bars(bars); else ImGui::TextDisabled("-");
+}
+
+// Weak signal alone isn't worth a notification: a weak repeater that still gets the lost packets through is
+// doing its job. Only one that isn't helping is: the main gave up on it (it got too few of the lost packets
+// through), it doesn't answer, or it answers too little of what it's asked.
+void Ui::CheckRepeaters(const State& s) {
+  for (const auto& v : Repeaters(s)) {
+    const bool helpless = v.useless || v.notAnswering || (v.relaying && v.answeredShare >= 0 && v.answeredShare < kWeakAnswered);
+    if (!v.weak || !helpless || v.main.empty()) { weakSince_.erase(v.key); continue; }
+    const double since = weakSince_.try_emplace(v.key, now_).first->second;   // (the clock starts near 0: no 0 sentinel)
+    const auto told = weakTold_.find(v.key);
+    if (now_ - since >= 5 && (told == weakTold_.end() || now_ - told->second > 600)) {
+      weakTold_[v.key] = now_;
+      alerts_.push_back(v.main + " and " + v.name + " have low signal, bring them closer");
+    }
+  }
+}
 
 void Ui::Dongles() {
   Title("Dongles", lh::ui::Icon::Dongle);
@@ -1000,8 +1136,24 @@ void Ui::Dongles() {
     if (ImGui::SmallButton("Pair")) Send(json{{"cmd", "pair"}, {"receiver", r.serial}, {"seconds", 30}}.dump(), "Pairing on " + r.serial);
     Tip("Hold the device's power button until it blinks");
   };
+  ImGui::BeginChild("dongles", ImVec2(0, 0));
 
-  // Doorman dongles: their slots, grouped by dongle.
+  const auto reps = Repeaters(s);
+  if (!reps.empty()) {
+    ImGui::SeparatorText("Repeaters");
+    if (ImGui::BeginTable("repeaters", 4, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX)) {
+      const float line = ImGui::GetTextLineHeight() + ImGui::GetStyle().ItemSpacing.x;   // the icon before the name
+      ImGui::TableSetupColumn("Repeater", ImGuiTableColumnFlags_WidthFixed, line + ImGui::CalcTextSize("PCA10059 00000000").x + em);
+      ImGui::TableSetupColumn("For", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("for PCA10059 00000000").x + em);
+      ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch);
+      ImGui::TableSetupColumn("Signal", ImGuiTableColumnFlags_WidthFixed, em * 2.5f);
+      for (const auto& v : reps) { ImGui::PushID(v.key.c_str()); RepeaterLine(v); ImGui::PopID(); }
+      ImGui::EndTable();
+    }
+    ImGui::Spacing();
+  }
+
+  // Doorman dongles: one card each with its devices. Repeaters plugged in here are shown above.
   std::map<std::string, std::vector<const Receiver*>> doorman;
   std::vector<const Receiver*> watchman;
   for (const auto& r : s.receivers) {
@@ -1009,95 +1161,93 @@ void Ui::Dongles() {
     else watchman.push_back(&r);
   }
   for (auto& [dongle, slots] : doorman) {
+    const auto found = s.dongles.find(dongle);
+    const Dongle* info = found == s.dongles.end() ? nullptr : &found->second;
+    const bool repeating = info && info->role == "repeater";
     std::sort(slots.begin(), slots.end(), [](auto* a, auto* b) { return a->slot < b->slot; });
     int paired = 0, linked = 0; double kbps = 0;
-    for (auto* r : slots) { paired += r->paired; linked += r->linked; kbps += r->linked ? r->kBytesPerSec : 0; }
-    ImGui::PushID(dongle.c_str());
-    ImGui::SeparatorText(("Doorman " + dongle).c_str());
-    ImGui::TextDisabled("%d connected, %d paired, %.1f kB/s", linked, paired, kbps);
-    if (const int fw = slots.front()->firmware) {
-      ImGui::SameLine();
-      if (slots.front()->firmwareOld) ImGui::TextColored(kWarn, "Firmware %04X, needs an update", fw);
-      else ImGui::TextDisabled("Firmware %04X", fw);
+    const Receiver* empty = nullptr;
+    for (auto* r : slots) {
+      paired += r->paired; linked += r->linked; kbps += r->linked ? r->kBytesPerSec : 0;
+      if (!r->paired && !empty) empty = r;
     }
-    const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp |
-                                  ImGuiTableFlags_PadOuterX;
-    if (ImGui::BeginTable("slots", 8, flags)) {
-      ImGui::TableSetupColumn("Slot", ImGuiTableColumnFlags_WidthFixed, em * 2.5f);
-      ImGui::TableSetupColumn("Device", ImGuiTableColumnFlags_WidthStretch);
-      ImGui::TableSetupColumn("Signal", ImGuiTableColumnFlags_WidthFixed, em * 8.5f);
-      ImGui::TableSetupColumn("Loss", ImGuiTableColumnFlags_WidthFixed, em * 3.5f);
-      ImGui::TableSetupColumn("Drops", ImGuiTableColumnFlags_WidthFixed, em * 3.5f);
-      ImGui::TableSetupColumn("Data", ImGuiTableColumnFlags_WidthFixed, em * 5.5f);
-      ImGui::TableSetupColumn("Radio", ImGuiTableColumnFlags_WidthFixed, em * 5.5f);
-      ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, em * 3.2f);
-      ImGui::TableHeadersRow();
-      for (const Receiver* r : slots) {
-        ImGui::PushID(r->slot);
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        ImGui::Text("%d", r->slot + 1);
-        ImGui::TableNextColumn();
-        if (!r->paired) ImGui::TextDisabled("Empty");
-        else if (!r->linked) { Dot(kOff, em * 0.28f); ImGui::TextDisabled("%s", r->connected.empty() ? "Off" : (deviceName(r->connected) + " (off)").c_str()); }
-        else { Dot(kGood, em * 0.28f); ImGui::TextUnformatted(r->connected.empty() ? "Connecting" : deviceName(r->connected).c_str()); }
-        ImGui::TableNextColumn();
-        const int bars = r->linked ? SignalBars(*r) : -1;
-        if (bars < 0) ImGui::TextDisabled("-");
-        else {
-          Bars(bars);
-          ImGui::SameLine();
-          ImGui::Text("%d / %d", r->rssiDongle, r->rssiDevice);
-          if (ImGui::IsItemHovered()) ImGui::SetTooltip("dBm at the dongle / at the device");
-        }
-        ImGui::TableNextColumn();
-        if (!r->linked || r->loss < 0) ImGui::TextDisabled("-");
-        else ImGui::TextColored(LossColor(r->loss), "%.1f%%", r->loss);
-        ImGui::TableNextColumn();
-        if (!r->linked) ImGui::TextDisabled("-");
-        else if (r->drops < 0.05) ImGui::TextDisabled("0");
-        else ImGui::TextColored(kBad, "%.1f/s", r->drops);
-        ImGui::TableNextColumn();
-        if (!r->linked) ImGui::TextDisabled("-");
-        else ImGui::Text("%.1f kB/s", r->kBytesPerSec);
-        ImGui::TableNextColumn();
-        if (!r->radio) ImGui::TextDisabled("-");
-        else if (r->radioOld) {
-          ImGui::TextColored(kWarn, "%08X", r->radio);
-          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Needs an update");
-        } else ImGui::TextDisabled("%08X", r->radio);
-        ImGui::TableNextColumn();
-        pairButton(*r);
+    ImGui::PushID(dongle.c_str());
+    char head[160];
+    const std::string name = DongleName(info ? info->board : -1, dongle);
+    if (repeating) std::snprintf(head, sizeof head, "%s   repeater###card", name.c_str());
+    else if (linked) std::snprintf(head, sizeof head, "%s   %d connected, %.1f kB/s###card", name.c_str(), linked, kbps);
+    else std::snprintf(head, sizeof head, "%s   none connected###card", name.c_str());
+    const bool open = ImGui::CollapsingHeader(head, ImGuiTreeNodeFlags_DefaultOpen);
+    if (open && repeating) {
+      // In use as a repeater (shown above too): how to have it back as a dongle.
+      Dot(kInfo, em * 0.28f);
+      if (info->autoRole) ImGui::TextColored(kInfo, "Acting as a repeater right now. Pair a device or turn on a paired one to use it as a dongle.");
+      else ImGui::TextColored(kInfo, "Set up as a repeater.");
+      if (info->autoRole && empty) {
+        ImGui::PushID("empty");
+        pairButton(*empty);
         ImGui::PopID();
       }
-      ImGui::EndTable();
+    } else if (open) {
+      const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX;
+      if (paired && ImGui::BeginTable("slots", 4, flags)) {
+        ImGui::TableSetupColumn("Device", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Signal", ImGuiTableColumnFlags_WidthFixed, em * 2.5f);
+        ImGui::TableSetupColumn("Loss", ImGuiTableColumnFlags_WidthFixed, em * 3.5f);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, em * 3.2f);
+        for (const Receiver* r : slots) {
+          if (!r->paired) continue;
+          ImGui::PushID(r->slot);
+          ImGui::TableNextRow();
+          ImGui::TableNextColumn();
+          if (!r->linked) { Dot(kOff, em * 0.28f); ImGui::TextDisabled("%s", r->connected.empty() ? "Off" : deviceName(r->connected).c_str()); }
+          else { Dot(kGood, em * 0.28f); ImGui::TextUnformatted(r->connected.empty() ? "Connecting" : deviceName(r->connected).c_str()); }
+          if (r->linked && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+            char t[320];
+            int k = std::snprintf(t, sizeof t, "Slot %d\n%d dBm at the dongle, %d at the device\n%.1f kB/s", r->slot + 1, r->rssiDongle,
+                                  r->rssiDevice, r->kBytesPerSec);
+            if (r->drops >= 0.05) k += std::snprintf(t + k, sizeof t - size_t(k), "\n%.1f drops/s", r->drops);
+            if (r->viaRepeater >= 0.5) k += std::snprintf(t + k, sizeof t - size_t(k), "\n%.0f answers/s from a repeater (%.0f%%)", r->viaRepeater, r->viaRepeaterShare);
+            if (r->lossAlone >= 0) k += std::snprintf(t + k, sizeof t - size_t(k), "\nLoss without repeaters %.1f%%", r->lossAlone);
+            if (r->radio) std::snprintf(t + k, sizeof t - size_t(k), "\nRadio %08X%s", r->radio, r->radioOld ? ", needs an update" : "");
+            ImGui::SetTooltip("%s", t);
+          }
+          ImGui::TableNextColumn();
+          const int bars = r->linked ? SignalBars(*r) : -1;
+          if (bars < 0) ImGui::TextDisabled("-"); else Bars(bars);
+          ImGui::TableNextColumn();
+          if (!r->linked || r->loss < 0) ImGui::TextDisabled("-");
+          else ImGui::TextColored(LossColor(r->loss), "%.1f%%", r->loss);
+          ImGui::TableNextColumn();
+          if (!r->linked) pairButton(*r);   // (pairing again into a slot whose device is off)
+          ImGui::PopID();
+        }
+        ImGui::EndTable();
+      }
+      if (empty) {
+        ImGui::TextDisabled("%d empty", int(slots.size()) - paired);
+        ImGui::SameLine();
+        ImGui::PushID("empty");
+        pairButton(*empty);
+        ImGui::PopID();
+      }
+      if (const int fw = slots.front()->firmware; fw && slots.front()->firmwareOld) ImGui::TextColored(kWarn, "Firmware %04X, needs an update", fw);
     }
     ImGui::PopID();
-    ImGui::Spacing();
   }
 
   if (!watchman.empty()) {
-    ImGui::SeparatorText("Valve and HTC dongles");
-    if (ImGui::BeginTable("watchman", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
-      ImGui::TableSetupColumn("Dongle");
-      ImGui::TableSetupColumn("Device");
-      ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, em * 3.2f);
-      ImGui::TableHeadersRow();
+    if (ImGui::CollapsingHeader("Valve and HTC dongles", ImGuiTreeNodeFlags_DefaultOpen)) {
       for (const Receiver* r : watchman) {
         ImGui::PushID(r->serial.c_str());
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        ImGui::TextUnformatted(r->serial.c_str());
-        ImGui::TableNextColumn();
-        if (r->connected.empty()) ImGui::TextDisabled("-");
-        else ImGui::TextUnformatted(deviceName(r->connected).c_str());
-        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(r->connected.empty() ? Short(r->serial).c_str() : deviceName(r->connected).c_str());
+        ImGui::SameLine();
         pairButton(*r);
         ImGui::PopID();
       }
-      ImGui::EndTable();
     }
   }
+  ImGui::EndChild();
 }
 
 void Ui::Map() {
