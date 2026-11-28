@@ -1107,9 +1107,13 @@ void Ui::RepeaterLine(const RepeaterView& v) {
   if (bars >= 0) Bars(bars); else ImGui::TextDisabled("-");
 }
 
+// Weak signal alone isn't worth a notification: a weak repeater that still gets the lost packets through is
+// doing its job. Only one that isn't helping is: the main gave up on it (it got too few of the lost packets
+// through), it doesn't answer, or it answers too little of what it's asked.
 void Ui::CheckRepeaters(const State& s) {
   for (const auto& v : Repeaters(s)) {
-    if (!v.weak || v.main.empty()) { weakSince_.erase(v.key); continue; }
+    const bool helpless = v.useless || v.notAnswering || (v.relaying && v.answeredShare >= 0 && v.answeredShare < kWeakAnswered);
+    if (!v.weak || !helpless || v.main.empty()) { weakSince_.erase(v.key); continue; }
     const double since = weakSince_.try_emplace(v.key, now_).first->second;   // (the clock starts near 0: no 0 sentinel)
     const auto told = weakTold_.find(v.key);
     if (now_ - since >= 5 && (told == weakTold_.end() || now_ - told->second > 600)) {
