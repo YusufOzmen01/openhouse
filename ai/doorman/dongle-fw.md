@@ -86,6 +86,15 @@ ceiling ≈ 8 devices per dongle (needs `DML_SLOTS` and the USB split changed); 
 * The stub boots the valid bank with the highest sequence. With no valid bank, or when the newest bank's
   origin isn't its payload (a bootloader just installed a new one), it installs its payload into bank A
   first (sequence + 1). So a bootloader flash always takes effect (rescue, downgrade).
+* The payload is bank A's image packed (`src/lz_unpack.h`, `tools/lzpack.py`; about 89 %): the "sd" stub has
+  only 0x26000-0x30000 for itself and the payload. The stub unpacks it straight into bank A and writes the
+  header only once the CRC the payload names matches. Every build unpacks each payload again on the host with
+  the stub's own code (`tools/lzcheck.c`) and fails if it isn't the bank image byte for byte. Only install
+  images changed: bank images and self-updates are as before, and a dongle keeps its stub until a bootloader
+  installs another, so dongles installed before this need nothing.
+* The firmware is built with LTO; functions only called from inline asm (`crash_entry`, `systick_c`) are
+  marked `used`, or LTO drops them. `link.c`'s `#pragma GCC optimize("O2")` still holds under LTO (GCC 14:
+  `decode_step` 3.9 KB with it, 1.2 KB without).
 * Self-update (no bootloader): 0x40 [size][crc] erases the other bank (header page first), 0x41
   [offset][n][bytes] writes into it, 0x42 checks the CRC, writes the header (sequence + 1, origin copied)
   and restarts. A failed or interrupted update leaves the running bank as it was. `dongle.py bank-update`,

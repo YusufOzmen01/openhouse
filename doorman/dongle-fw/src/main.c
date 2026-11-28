@@ -59,7 +59,8 @@ static void enter_bootloader(uint8_t magic) {
     NVIC_SystemReset();
 }
 
-void crash_entry(uint32_t *frame, uint32_t type) {
+/* used: only reached from the fault stubs' asm, which LTO can't see (it dropped them) */
+__attribute__((used)) void crash_entry(uint32_t *frame, uint32_t type) {
     uint32_t n = crash_valid() ? crash->count : 0;
     crash->magic = CRASH_MAGIC; crash->type = type;
     crash->pc = frame ? frame[6] : 0; crash->lr = frame ? frame[5] : 0; crash->psr = frame ? frame[7] : 0;
@@ -92,7 +93,7 @@ void WDT_IRQHandler(void) { crash_entry(0, 5); }   /* runs just before a watchdo
 volatile uint32_t ms_ticks;
 static volatile uint32_t hb_ms;
 static uint8_t safe_mode;
-void systick_c(uint32_t *frame)
+__attribute__((used)) void systick_c(uint32_t *frame)   /* used: called from SysTick_Handler's asm */
 {
     ms_ticks++;
     if (ms_ticks - hb_ms > HANG_MS) { hb_ms = ms_ticks; crash_entry(frame, 6); }
