@@ -1795,10 +1795,10 @@ class Provider : public IServerTrackedDeviceProvider {
   bool replay_ = false;
   std::string referencePath_;
   lh::openvr::RawAlignment setUpAlignment_;  // SteamVR's universes with Room Setup done
-  std::set<const lh::openvr::RawAlignment*> trimLogged_;
+  std::set<std::pair<const lh::openvr::RawAlignment*, int>> trimLogged_;
   // Once a session per alignment: how far SteamVR's level was from ours (it glides to ours).
   void LogLevelTrim(const lh::openvr::RawAlignment& a) {
-    if (a.LevelTrimDegrees() < 0 || a.RoomId().empty() || !trimLogged_.insert(&a).second) return;
+    if (a.LevelTrimDegrees() < 0 || a.RoomId().empty() || !trimLogged_.insert({&a, a.LevelTrimDecisions()}).second) return;
     char text[160];
     std::snprintf(text, sizeof text, "SteamVR's universe %s is %.2f deg off level: levelling it to our room", a.RoomId().c_str(),
                   a.LevelTrimDegrees());

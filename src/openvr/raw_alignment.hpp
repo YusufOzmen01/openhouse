@@ -14,6 +14,7 @@ class RawAlignment {
   const std::string& RoomId() const { return roomId_; }
   // How far SteamVR's level was off ours (deg), once decided this session; < 0 until then.
   double LevelTrimDegrees() const { return trimDecided_ ? trimDegrees_ : -1; }
+  int LevelTrimDecisions() const { return trimDecisions_; }  // one per room this session
  private:
   runtime::RoomMap reference_;
   uint32_t anchor_ = 0;
@@ -27,6 +28,8 @@ class RawAlignment {
   static constexpr double kTrimRad = 0.5 * 0.017453292519943295, kTrimWaitSeconds = 120;
   bool trimDecided_ = false;
   double trimDegrees_ = 0, trimTime_ = -1, firstTime_ = -1;
+  std::string trimRoom_;  // the room the trim was decided against
+  int trimDecisions_ = 0;
   Eigen::Matrix3d trimTarget_ = Eigen::Matrix3d::Identity(), trim_ = Eigen::Matrix3d::Identity();
 };
 }

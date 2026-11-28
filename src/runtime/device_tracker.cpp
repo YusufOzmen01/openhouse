@@ -4,6 +4,7 @@
 #include "tracking/lighthouse_model.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <set>
 #include <cmath>
 #include <cstdlib>
@@ -83,6 +84,7 @@ void DeviceTracker::SetImuDisabled(bool on) {
 }
 
 void DeviceTracker::ResetFilter() {
+  ++lightDiag_.resets;
   filter_ = std::make_unique<LighthouseDirect>(model_);
   refusedLit_ = 0;
   calibratedAt_ = 0;
@@ -131,8 +133,9 @@ void DeviceTracker::OnPulse(const LightPulse& pulse) {
 double DeviceTracker::Now() const { return latestImu_.value_or(filter_->Time()); }
 
 void DeviceTracker::Process() {
+  const auto processStart = std::chrono::steady_clock::now();
   ImuSample imu;
-  while (source_.PopImu(&imu)) filter_->OnImu(imu);
+  while (source_.PopImu(&imu)) { filter_->OnImu(imu); ++lightDiag_.imu; }
   OpticalFrame frame;
   while (source_.PopFrame(&frame)) { ++framesHandled_; HandleFrame(frame); }
   // Without light the filter runs on the IMU up to `inertialLag_` behind the newest
@@ -149,6 +152,39 @@ void DeviceTracker::Process() {
   SyncRoom();
   CheckHealth();
   UpdateOutput();
+  const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - processStart).count();
+  lightDiag_.processMaxMs = std::max(lightDiag_.processMaxMs, ms);
+  lightDiag_.processSumMs += ms;
+  ++lightDiag_.processCalls;
+  LogLightDiagnostics(false);
+}
+
+// Every 10 s while light was dropped late or tracking was reset in the window, else every 60 s.
+void DeviceTracker::LogLightDiagnostics(bool force) {
+  auto& d = lightDiag_;
+  const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  if (d.since < 0) { d.since = now; return; }
+  const double span = now - d.since;
+  const bool troubled = d.late > 0 || d.resets > 0;
+  if (!force && !(span >= (troubled ? 10 : 60))) return;
+  if (d.frames || d.imu) {
+    std::vector<float> b = d.behindImuMs;
+    float p50 = 0, p95 = 0, mx = 0;
+    if (!b.empty()) {
+      std::sort(b.begin(), b.end());
+      p50 = b[b.size() / 2]; p95 = b[std::min(b.size() - 1, b.size() * 95 / 100)]; mx = b.back();
+    }
+    char text[400];
+    std::snprintf(text, sizeof text,
+                  "light diagnostics (%.0f s): %d frames, %d used, %d too late for the filter (up to %.0f ms behind it), %d not used "
+                  "otherwise, %d tracking resets; light behind the IMU median %.0f ms, p95 %.0f ms, max %.0f ms; %d IMU samples; "
+                  "processing %.2f ms per pass, max %.1f ms",
+                  span, d.frames, d.used, d.late, d.lateMaxMs, d.other, d.resets, p50, p95, mx, d.imu,
+                  d.processCalls ? d.processSumMs / d.processCalls : 0.0, d.processMaxMs);
+    Log(text);
+  }
+  d = {};
+  d.since = now;
 }
 
 // runtime::ForeignSweeps on a 1.0 frame: each sample against where the pose puts the frame's station's sweep.
@@ -285,9 +321,21 @@ void DeviceTracker::HandleFrame(const OpticalFrame& incoming) {
   }
   const int rejectsBefore = filter_->Filter().rejectCount;
   const double lastOpticalBefore = filter_->LastOpticalTime();
+  // (diagnostics: the frame's light time, against the filter's and the newest IMU's, before the update)
+  double lightTime = frame.syncTime;
+  for (const auto& s : frame.samples) lightTime = std::min(lightTime > 0 ? lightTime : s.time, s.time);
+  const double filterBefore = filter_->Time();
+  const bool wasBootstrapped = filter_->Bootstrapped();
   LighthouseDirect::RecoveryEvidence recovery;
   filter_->OnFrame(frame, &recovery);
   const bool usedLight = filter_->LastOpticalTime() != lastOpticalBefore;
+  ++lightDiag_.frames;
+  if (latestImu_ && lightTime > 0) lightDiag_.behindImuMs.push_back(float((*latestImu_ - lightTime) * 1000));
+  if (usedLight) ++lightDiag_.used;
+  else if (wasBootstrapped && lightTime > 0 && lightTime < filterBefore) {
+    ++lightDiag_.late;
+    lightDiag_.lateMaxMs = std::max(lightDiag_.lateMaxMs, (filterBefore - lightTime) * 1000);
+  } else ++lightDiag_.other;
   // A late sweep is skipped by PredictTo before it can supply rejection evidence.
   if (usedLight) {
     refusedLit_ = 0;
@@ -356,7 +404,13 @@ void DeviceTracker::CollectKeyframe(const OpticalFrame& frame) {
   if (frame.nominalSyncWidth > 0 && !lh1Keyframes_) { frameBuffer_.clear(); return; }
   const auto& f = filter_->Filter();
   const uint32_t primary = filter_->BaseSerial(0);
-  if (f.updateCount < 110 || Now() - filter_->LastOpticalTime() > 0.05) { frameBuffer_.clear(); return; }
+  // Light in the filter lately. Mixing light (both kinds together), measured from this frame's own time, not
+  // the newest IMU sample's: the sorted light comes ~65 ms behind the IMU (held back for the 2.0 stations'
+  // batched reports), so no keyframe was ever taken of it, and a 1.0 station too weakly seen to bootstrap on,
+  // which only the room solver could place, never was (four 2.0 stations and two 1.0: the second 1.0 one).
+  // (2.0 light alone comes as late, and the same would switch the room solver on in every 2.0 room: left.)
+  const double lightAt = mixedScatter_[0] > 0 ? frame.syncTime : Now();
+  if (f.updateCount < 110 || std::abs(lightAt - filter_->LastOpticalTime()) > 0.05) { frameBuffer_.clear(); return; }
   if (!frameBuffer_.empty() && frameBuffer_.back().primary != primary) frameBuffer_.clear();
   // Pose of the device at time t from the filter state right now (the same
   // extrapolation the filter's residuals use, 0x376380).
@@ -398,6 +452,13 @@ void DeviceTracker::CollectKeyframe(const OpticalFrame& frame) {
   int complete = 0;
   for (const auto& [base, h] : hits) complete += h[0] >= 4 && h[1] >= 4;
   if (complete < 2) return;
+  // Mixing, only to place a base the room hasn't yet: refining placed ones on this light moved a well-placed
+  // 1.0 station 7 cm and called it knocked (its light then refused by every device, 24 cm off).
+  if (mixedScatter_[0] > 0) {
+    bool unplaced = false;
+    for (const auto& [base, h] : hits) unplaced |= h[0] >= 4 && h[1] >= 4 && !room_->Base(base);
+    if (!unplaced) return;
+  }
   const Eigen::Vector3d v(f.x[3], f.x[4], f.x[5]), w(f.x[13], f.x[14], f.x[15]);
   // Very fast motion makes the per-sample poses less certain than the samples.
   if (filter_->Time() - lastKeyframe_ < 0.1 || v.norm() > 2.0 || w.norm() > 6.0) return;

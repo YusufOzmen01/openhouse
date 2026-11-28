@@ -322,6 +322,45 @@ TEST(RawAlignment, LevelsSmallDifferencesOnceOurLevelSettlesAndNeverDrifts) {
   EXPECT_TRUE((alignment.RawFromWorld() * Eigen::Isometry3d(turn)).isApprox(anchorRaw, 1e-9));
 }
 
+// A room reset makes a new room with its own level: the frame is levelled to it again, not left with the
+// trim decided against the old room (the view stayed tilted until SteamVR restarted).
+TEST(RawAlignment, LevelsAgainAfterARoomReset) {
+  const auto path = (std::filesystem::temp_directory_path() / ("lh-test-rawalign4-" + std::to_string(lh::platform::ProcessId()) + ".json")).string();
+  {
+    std::ofstream f(path);
+    f << R"({"known_universes": [{"id": "77", "tilt": {"pitch": 0.035, "roll": 0.0},
+             "base_stations": [{"base_serial_number": 1,
+               "target_pose": {"pose": [0, 0, 0, 1, 1, 2, 3], "variance": 0}}]}],
+           "base_stations": [{"config": {"serialNumber": 1, "baseCalibration": [0,0,0,0,0,0,0,0,0,0,0,0,0,0]},
+             "dynamic_states": [{"dynamic_state": {"reset_count": 1}}]}]})";
+  }
+  lh::openvr::RawAlignment alignment;
+  std::string error;
+  ASSERT_TRUE(alignment.Load(path, &error)) << error;
+  std::filesystem::remove(path);
+  lh::SessionSnapshot snapshot;
+  snapshot.roomId = "room-a";
+  lh::BaseStationState base;
+  base.id = 1; base.known = base.seen = base.origin = true;
+  base.worldFromBase.orientation = {1, 0, 0, 0};
+  snapshot.bases.push_back(base);
+  snapshot.levelSettled = true;
+  const auto tilt = [&] { return std::acos(std::clamp((alignment.RawFromWorld().rotation() * Eigen::Vector3d::UnitY()).y(), -1.0, 1.0)); };
+  for (int i = 0; i <= 100; ++i) { snapshot.hostTime = 0.1 * i; ASSERT_TRUE(alignment.Update(snapshot)); }
+  ASSERT_LT(tilt(), 1e-6);
+  // reset: a new room, whose level puts the same base 1.5 deg differently; still learning its level
+  snapshot.roomId = "room-b";
+  snapshot.levelSettled = false;
+  const Eigen::Quaterniond turn(Eigen::AngleAxisd(0.026, Eigen::Vector3d::UnitZ()));
+  snapshot.bases[0].worldFromBase.orientation = {turn.w(), turn.x(), turn.y(), turn.z()};
+  for (int i = 0; i < 50; ++i) { snapshot.hostTime += 0.1; ASSERT_TRUE(alignment.Update(snapshot)); }
+  EXPECT_GT(tilt(), 0.02) << "the old room's trim, until the new level settles";
+  snapshot.levelSettled = true;
+  for (int i = 0; i < 100; ++i) { snapshot.hostTime += 0.1; ASSERT_TRUE(alignment.Update(snapshot)); }
+  EXPECT_LT(tilt(), 1e-6) << "levelled to the new room";
+  EXPECT_EQ(alignment.LevelTrimDecisions(), 2);
+}
+
 // A room whose level never settles still gets SteamVR's frame levelled, after a wait.
 TEST(RawAlignment, LevelsAfterAWaitWhenOurLevelNeverSettles) {
   const auto path = (std::filesystem::temp_directory_path() / ("lh-test-rawalign3-" + std::to_string(lh::platform::ProcessId()) + ".json")).string();
@@ -1126,4 +1165,20 @@ TEST(Skeleton, OpenHandRestsByHowTheControllerIsHeld) {
   EXPECT_LT(spread(h.Current(false), rolled), spread(level, rolled) * 0.7);
   for (const auto& b : rolled)
     for (float v : {b.orientation.w, b.orientation.x, b.orientation.y, b.orientation.z}) EXPECT_TRUE(std::isfinite(v));
+}
+
+// Pushed right, the thumb tip goes right (the hand's +x). It went left (reported live).
+TEST(HandSkeletonTest, StickRightMovesThumbRight) {
+  const char* file = std::getenv("LH_HAND_POSES");
+  if (!file) GTEST_SKIP() << "set LH_HAND_POSES to Valve's installed vr_glove_right_poses.glb";
+  lh::openvr::HandSkeleton hand;
+  std::string error;
+  ASSERT_TRUE(hand.Load(file, false, &error)) << error;
+  auto tipX = [&](float x, bool controller) {
+    lh::ControllerInput in;
+    in.thumbstickTouch = true; in.thumbstickX = x;
+    return hand.Evaluate(in, controller)[26].position.v[0];
+  };
+  for (bool controller : {true, false})
+    EXPECT_GT(tipX(1, controller) - tipX(-1, controller), 0.005f) << (controller ? "with" : "without") << " controller";
 }

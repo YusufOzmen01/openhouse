@@ -186,6 +186,18 @@ class DeviceTracker {
   std::map<uint32_t, double> lastFrame_;  // last sweep time per base
   std::optional<double> preferLocatedSince_;
   uint64_t framesHandled_ = 0;
+  // Light diagnostics, logged as a summary (LogLightDiagnostics): what became of each light frame handed to
+  // the filter, how far behind the IMU the light was, and how long a processing pass took. For tracking that
+  // loses the light live though its recording replays fine (late light the filter has already passed).
+  struct LightDiagnostics {
+    double since = -1;                 // host seconds (steady) the window started
+    int frames = 0, used = 0, late = 0, other = 0, resets = 0;
+    double lateMaxMs = 0;              // how far the latest late frame was behind the filter
+    std::vector<float> behindImuMs;    // each frame's light behind the newest IMU sample
+    double processMaxMs = 0, processSumMs = 0;
+    int processCalls = 0, imu = 0;
+  } lightDiag_;
+  void LogLightDiagnostics(bool force);
   int backwardPulses_ = 0;  // consecutive pulses timestamped behind the filter
   // Output stage (UpdateOutput)
   bool predictOutput_ = true, smoothOutput_ = true;

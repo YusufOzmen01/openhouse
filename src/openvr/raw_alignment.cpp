@@ -18,7 +18,7 @@ bool RawAlignment::LoadText(const std::string& lighthousedb, std::string* error)
   anchor_ = 0; roomId_.clear(); rawFromWorld_.setIdentity();
   levelDecided_ = false; levelFix_.setIdentity();
   trimDecided_ = false; trimDegrees_ = 0; trimTime_ = firstTime_ = -1;
-  trimTarget_.setIdentity(); trim_.setIdentity();
+  trimTarget_.setIdentity(); trim_.setIdentity(); trimRoom_.clear();
   return reference_.ImportSteamDatabase(lighthousedb, error);
 }
 bool RawAlignment::Update(const SessionSnapshot& snapshot) {
@@ -66,13 +66,22 @@ bool RawAlignment::Update(const SessionSnapshot& snapshot) {
     // (or after kTrimWaitSeconds, whatever it is) the frame is turned to it, gliding in, about
     // SteamVR's origin (the play area's floor: its height there stays), and then held for the
     // session: the same each session within our level's accuracy, never a frame that drifts.
+    // A new room (a room reset) has its own level, learned again: the trim decided against the old one
+    // no longer holds (after a reset, the old room, imported from this very universe, had needed none, and the
+    // universe's own tilt came back for the rest of the session). Decided again once the new level has
+    // settled, gliding from where it is.
     const double now = snapshot.hostTime;
+    if (snapshot.roomId != trimRoom_) {
+      if (!trimRoom_.empty()) { trimDecided_ = false; firstTime_ = now; }
+      trimRoom_ = snapshot.roomId;
+    }
     if (firstTime_ < 0) firstTime_ = now;
     if (!trimDecided_ && (snapshot.levelSettled || now - firstTime_ > kTrimWaitSeconds)) {
       trimDecided_ = true;
       const Eigen::Vector3d up = rawFromWorld_.rotation() * Eigen::Vector3d::UnitY();
       trimTarget_ = Eigen::Quaterniond::FromTwoVectors(up, Eigen::Vector3d::UnitY()).toRotationMatrix();
       trimDegrees_ = std::acos(std::clamp(up.y(), -1.0, 1.0)) * 57.29577951308232;
+      ++trimDecisions_;
     }
     const double dt = trimTime_ < 0 ? 0 : std::clamp(now - trimTime_, 0.0, 0.1);
     trimTime_ = now;

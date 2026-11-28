@@ -303,7 +303,8 @@ void HandSkeleton::Update(const ControllerInput& in, double seconds) {
   // A deflected stick has the thumb on it too, as in ThumbState: a stick whose touch sensor
   // fails still moves the thumb.
   if (in.thumbstickTouch || in.thumbstickClick || in.thumbstickX != 0 || in.thumbstickY != 0) {
-    tx = Remap(-side * float(in.thumbstickX), -1, 1, 0.2f, 1.f); ty = float(in.thumbstickY);
+    // The stick's x runs the other way to the pad's on the thumb's clips: pushed left, the thumb went right.
+    tx = Remap(side * float(in.thumbstickX), -1, 1, 0.2f, 1.f); ty = float(in.thumbstickY);
   } else if (in.trackpadTouch) {
     tx = Remap(-side * float(in.trackpadX), -1, 1, -0.2f, 0.2f); ty = float(in.trackpadY);
   } else if (in.aTouch || in.bTouch || in.aClick || in.bClick) {
@@ -325,7 +326,7 @@ void HandSkeleton::Update(const ControllerInput& in, double seconds) {
   const int state = ThumbState(in);
   s.padX = -side * float(std::isfinite(in.trackpadX) ? in.trackpadX : 0);
   s.padY = float(std::isfinite(in.trackpadY) ? in.trackpadY : 0);
-  s.stickX = -side * float(std::isfinite(in.thumbstickX) ? in.thumbstickX : 0);
+  s.stickX = side * float(std::isfinite(in.thumbstickX) ? in.thumbstickX : 0);
   s.stickY = float(std::isfinite(in.thumbstickY) ? in.thumbstickY : 0);
   if (state != s.thumbState) {
     s.thumbFrom = ThumbPose(s, true);  // where the thumb is now, mid-fade or not

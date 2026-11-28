@@ -24,6 +24,15 @@
   glfw,
   freetype,
   libGL,
+  wayland,
+  libxkbcommon,
+  libdecor,
+  libX11,
+  libXcursor,
+  libXrandr,
+  libXi,
+  libXinerama,
+  libXext,
   version,
   commit ? "",
   src,
@@ -52,6 +61,8 @@ stdenv.mkDerivation {
   nativeBuildInputs = [ cmake ninja pkg-config python3 autoPatchelfHook copyDesktopItems ]
     ++ lib.optionals withFirmware [ gcc-arm-embedded ];
   buildInputs = [ eigen ceres nlohmann_json zlib systemd dbus openvr glfw freetype libGL ];
+  # What GLFW opens itself (dlopen), so not linked: without them in the rpath, "no display" (package-bin.nix).
+  runtimeDependencies = [ libGL wayland libxkbcommon libdecor libX11 libXcursor libXrandr libXi libXinerama libXext ];
 
   cmakeFlags = [
     "-DCMAKE_BUILD_TYPE=Release"

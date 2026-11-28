@@ -20,6 +20,14 @@
   bzip2,
   libpng,
   brotli,
+  wayland,
+  libxkbcommon,
+  libdecor,
+  libXcursor,
+  libXrandr,
+  libXi,
+  libXinerama,
+  libXext,
   repo,
 }:
 
@@ -40,6 +48,9 @@ stdenv.mkDerivation {
   # What the release binaries link: the C++ runtime (the tools and the driver), udev, OpenGL and X11
   # (GLFW is built in), freetype and its libraries, and D-Bus (the Bluetooth library).
   buildInputs = [ stdenv.cc.cc.lib systemd dbus libGL libX11 libxcb libXau libXdmcp freetype zlib bzip2 libpng brotli ];
+  # What GLFW opens itself (dlopen), so not linked: the Wayland and X11 libraries and OpenGL. Without them in
+  # the rpath every window app stops with "no display".
+  runtimeDependencies = [ libGL wayland libxkbcommon libdecor libX11 libXcursor libXrandr libXi libXinerama libXext ];
 
   dontConfigure = true;
   dontBuild = true;
